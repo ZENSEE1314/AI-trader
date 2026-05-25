@@ -2269,166 +2269,171 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   const now   = cur.t;
   const price = cur.c;
 
-  // ── STEP 1: 15m pivot — HH/HL → LONG, LH/LL → SHORT ────────────────
-  // Single fresh pivot on 15m is sufficient to determine direction.
-  // HH or HL = uptrend pivot → look for 1m HL → LONG
-  // LH or LL = downtrend pivot → look for 1m LH → SHORT
-  const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
-  const structure = _detect15mPivot(ph15, pl15, bars15m.length);
-  if (!structure) return null; // no fresh 15m pivot — no trade
-
-  const { dir, pivot15, label } = structure;
-  L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
-
-  // ── 4H trend gate — only trade with the macro trend ─────────────────
-  // DOWN on 4H → reject LONGs (counter-trend against macro sellers)
-  // UP   on 4H → reject SHORTs (counter-trend against macro buyers)
-  // NEUTRAL → allow both directions (ranging market, let 15m structure decide)
-  let trend4h = 'NEUTRAL';
-  try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}
-  if (dir === 'LONG'  && trend4h === 'DOWN') {
-    L(`Step1b FAIL — 4H trend is DOWN, rejecting LONG`);
-    return null;
-  }
-  if (dir === 'SHORT' && trend4h === 'UP') {
-    L(`Step1b FAIL — 4H trend is UP, rejecting SHORT`);
-    return null;
-  }
-  L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}`);
-
-  // ── Step 1c: 1m CHoCH direction filter ──────────────────────────────
-  // Block the signal when 1m CHoCH contradicts the 15m structure direction:
-  //   15m LL→LH (SHORT) + 1m BULLISH CHoCH → buyers stepping in → redirect to LONG
-  //   15m HH→HL (LONG)  + 1m BEARISH CHoCH → sellers stepping in → redirect to SHORT
+  // ── STEP 1: 15m structure — two-pivot sequence (normal) or single pivot (redirect) ──
   //
-  // Redirect fires when the 15m structure eventually prints the opposite pattern.
-  // Expires in 4 hours to avoid staleness.
-  const CHOCH_RECENCY_MS = 90 * 60_000; // 90 min — stale CHoCH ignored
+  // Normal path:  LL→LH → SHORT  |  HH→HL → LONG  (requires both pivots in sequence)
+  // Redirect path: when 1m CHoCH blocked the original signal, any single bullish pivot
+  //   (HH or HL) resolves a LONG redirect; any single bearish pivot (LH or LL) resolves SHORT.
+  //
+  // This means:  LL→LH fires SHORT normally.
+  //   If 1m CHoCH is BULLISH at that moment → SHORT blocked, redirect=LONG stored.
+  //   Next scan sees HH or HL on 15m → redirect resolves → LONG entry (via 1m HL below).
+  const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
+  const total1m = bars1m.length;
+
+  let dir, pivot15, label;
 
   const activeRedirect = _chochRedirectMap.get(sym);
   if (activeRedirect) {
     if (now > activeRedirect.expiresAt) {
+      // Redirect expired — fall back to normal two-pivot check
       _chochRedirectMap.delete(sym);
-      L(`Step1c — CHoCH redirect expired, cleared`);
-      // Fall through — evaluate this structure fresh
-    } else if (dir !== activeRedirect.redirectDir) {
-      // 15m still printing the blocked direction — keep waiting
-      L(`Step1c REDIRECT BLOCK — waiting for ${activeRedirect.redirectDir}, current structure=${dir}`);
-      return null;
+      L(`Step1 — CHoCH redirect expired, cleared`);
+      const st = _detect15mStructure(ph15, pl15, bars15m, 0, cfg.slPct);
+      if (!st) return null;
+      ({ dir, pivot15, label } = st);
     } else {
-      // 15m now shows the redirected direction — allow and clear
-      L(`Step1c REDIRECT ALLOW ✓ — CHoCH redirect resolved: ${dir} confirmed, proceeding`);
-      _chochRedirectMap.delete(sym);
-      // Fall through — continue to Steps 2–4 normally
+      // Redirect active — resolve on ANY single bullish/bearish 15m pivot
+      const single = _detect15mPivot(ph15, pl15, bars15m.length);
+      if (single && single.dir === activeRedirect.redirectDir) {
+        _chochRedirectMap.delete(sym);
+        L(`Step1 REDIRECT ALLOW ✓ — ${single.label} on 15m resolves redirect to ${activeRedirect.redirectDir}`);
+        ({ dir, pivot15, label } = single);
+      } else {
+        L(`Step1 REDIRECT BLOCK — waiting for ${activeRedirect.redirectDir} pivot on 15m`);
+        return null;
+      }
     }
   } else {
-    // No redirect active — check fresh 1m CHoCH for a potential block+redirect
+    // Normal path: require full two-pivot sequence
+    const st = _detect15mStructure(ph15, pl15, bars15m, 0, cfg.slPct);
+    if (!st) return null;
+    ({ dir, pivot15, label } = st);
+  }
+
+  L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
+
+  // ── Step 1b: 4H trend gate ───────────────────────────────────────────
+  let trend4h = 'NEUTRAL';
+  try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}
+  if (dir === 'LONG'  && trend4h === 'DOWN') { L(`Step1b FAIL — 4H DOWN, rejecting LONG`);  return null; }
+  if (dir === 'SHORT' && trend4h === 'UP')   { L(`Step1b FAIL — 4H UP, rejecting SHORT`);   return null; }
+  L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}`);
+
+  // ── Step 1c: 1m CHoCH conflict → store redirect ──────────────────────
+  // Only checked when no redirect is already active (we just resolved or cleared it above).
+  // If 15m fires SHORT but 1m CHoCH is BULLISH → block SHORT, redirect to LONG.
+  // Mirror for LONG. Redirect stored for 4 h; resolves on next single 15m pivot match.
+  if (!_chochRedirectMap.has(sym)) {
+    const CHOCH_RECENCY_MS = 90 * 60_000;
     const choch1m = detectCHoCH(bars1m, _toPivotsForCHoCH(bars1m), 90);
     if (choch1m) {
       const chochAgeMs = now - choch1m.candleTs;
-      const isRecentCHoCH = chochAgeMs < CHOCH_RECENCY_MS;
-      const chochConflicts = isRecentCHoCH && (
+      const conflicts  = chochAgeMs < CHOCH_RECENCY_MS && (
         (dir === 'SHORT' && choch1m.direction === 'BULLISH') ||
         (dir === 'LONG'  && choch1m.direction === 'BEARISH')
       );
-      if (chochConflicts) {
+      if (conflicts) {
         const redirectDir = dir === 'SHORT' ? 'LONG' : 'SHORT';
-        _chochRedirectMap.set(sym, {
-          redirectDir,
-          blockedDir: dir,
-          blockedAt:  now,
-          expiresAt:  now + 4 * 60 * 60_000,
-        });
-        L(`Step1c BLOCKED — 1m CHoCH=${choch1m.direction} conflicts with ${dir} → redirect to ${redirectDir} when opposite 15m structure forms`);
+        _chochRedirectMap.set(sym, { redirectDir, blockedDir: dir, blockedAt: now, expiresAt: now + 4 * 60 * 60_000 });
+        L(`Step1c BLOCKED — 1m CHoCH=${choch1m.direction} conflicts with ${dir} → redirect to ${redirectDir}`);
         return null;
-      }
-      if (!isRecentCHoCH) {
-        L(`Step1c — 1m CHoCH=${choch1m.direction} but ${Math.round(chochAgeMs / 60_000)}m old (stale, ignoring)`);
       }
     }
   }
 
-  // ── STEP 2: 1m CHoCH is the entry trigger ───────────────────────────
-  // 15m HH/HL + 1m BULLISH CHoCH → LONG
-  // 15m LH/LL + 1m BEARISH CHoCH → SHORT
-  // CHoCH must have happened after the 15m pivot bar and within WINDOW_MS.
-  const expectedChoch = dir === 'LONG' ? 'BULLISH' : 'BEARISH';
-  const choch1mEntry  = detectCHoCH(bars1m, _toPivotsForCHoCH(bars1m), 90);
+  // ── STEP 2: Find 1m HL (LONG) or LH (SHORT) within WINDOW_MS of 15m pivot ──
+  const { ph: ph1, pl: pl1 } = _allPivots(bars1m);
+  let pivot1m = null;
 
-  if (!choch1mEntry) {
-    L(`Step2 WAIT — no 1m CHoCH detected`);
+  if (dir === 'SHORT') {
+    for (let i = ph1.length - 1; i >= 1; i--) {
+      const diff = ph1[i].barTs - pivot15.barTs;
+      if (diff < 0) break;
+      if (diff > WINDOW_MS) continue;
+      if (ph1[i].price >= ph1[i - 1].price) continue; // not a LH — skip
+      if (!pivot1m || ph1[i].price > pivot1m.price) pivot1m = ph1[i];
+    }
+  } else {
+    for (let i = pl1.length - 1; i >= 1; i--) {
+      const diff = pl1[i].barTs - pivot15.barTs;
+      if (diff < 0) break;
+      if (diff > WINDOW_MS) continue;
+      if (pl1[i].price <= pl1[i - 1].price) continue; // not a HL — skip
+      if (!pivot1m || pl1[i].price < pivot1m.price) pivot1m = pl1[i];
+    }
+  }
+  if (!pivot1m) {
+    L(`Step2 WAIT — no 1m ${dir === 'SHORT' ? 'LH' : 'HL'} within window of 15m pivot`);
     return null;
   }
-  if (choch1mEntry.direction !== expectedChoch) {
-    L(`Step2 FAIL — 1m CHoCH=${choch1mEntry.direction}, need ${expectedChoch}`);
-    return null;
-  }
-  const chochDiff = choch1mEntry.candleTs - pivot15.barTs;
-  if (chochDiff < 0 || chochDiff > WINDOW_MS) {
-    L(`Step2 FAIL — 1m CHoCH outside ${WINDOW_MS / 60_000}min window of 15m pivot`);
-    return null;
-  }
-  L(`Step2 PASS ✓ — 1m ${expectedChoch} CHoCH @ ${choch1mEntry.level.toFixed(2)}`);
+  L(`Step2 PASS ✓ — 1m ${dir === 'SHORT' ? 'LH' : 'HL'} @ ${pivot1m.price.toFixed(2)}`);
 
-  // ── STEP 3: CHoCH freshness from NOW (≤ 30 min) ──────────────────────
-  const chochAgeMs = now - choch1mEntry.candleTs;
-  if (chochAgeMs > 30 * 60_000) {
-    L(`Step3 FAIL — 1m CHoCH is ${Math.round(chochAgeMs / 60_000)}min old (max 30)`);
+  // ── STEP 2b: 1m pivot level must be close to 15m pivot ──────────────
+  const LEVEL_TOL = cfg.slPct * 2;
+  const levelDiff = Math.abs(pivot1m.price - pivot15.price) / pivot15.price;
+  if (levelDiff > LEVEL_TOL) {
+    L(`Step2b FAIL — 1m ${pivot1m.price.toFixed(2)} too far from 15m ${pivot15.price.toFixed(2)} (${(levelDiff*100).toFixed(2)}% > ${(LEVEL_TOL*100).toFixed(2)}%)`);
     return null;
   }
-  L(`Step3 PASS ✓ — 1m CHoCH is ${Math.round(chochAgeMs / 60_000)}min old`);
 
-  // ── STEP 4: Chase filter — don't enter far past the CHoCH level ──────
-  if (dir === 'LONG'  && price > choch1mEntry.level * (1 + ENTRY_TOL * 3)) {
-    L(`Step4 FAIL — price ${price.toFixed(2)} chased too far above CHoCH ${choch1mEntry.level.toFixed(2)}`);
+  // ── STEP 3: 1m pivot freshness from NOW (≤ 30 min) ──────────────────
+  const bars1mNowAge = (total1m - 1) - pivot1m.idx;
+  if (bars1mNowAge > 30) {
+    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 30)`);
     return null;
   }
-  if (dir === 'SHORT' && price < choch1mEntry.level * (1 - ENTRY_TOL * 3)) {
-    L(`Step4 FAIL — price ${price.toFixed(2)} chased too far below CHoCH ${choch1mEntry.level.toFixed(2)}`);
+  L(`Step3 PASS ✓ — 1m pivot is ${bars1mNowAge} bars old`);
+
+  // ── STEP 4: Chase filter — entry must be within ENTRY_TOL of the 1m pivot ──
+  if (dir === 'LONG'  && price > pivot1m.price * (1 + ENTRY_TOL)) {
+    L(`Step4 FAIL — price ${price.toFixed(2)} chased above HL ${pivot1m.price.toFixed(2)}`);
+    return null;
+  }
+  if (dir === 'SHORT' && price < pivot1m.price * (1 - ENTRY_TOL)) {
+    L(`Step4 FAIL — price ${price.toFixed(2)} chased below LH ${pivot1m.price.toFixed(2)}`);
     return null;
   }
 
   // ── Cooldown: each 15m pivot bar fires at most once ──────────────────
-  const cdKey = `${sym}_KL`;               // one cooldown slot per symbol
-  const SYMBOL_CD = 60 * 60_000;           // 1 hour — no refire after close
+  const cdKey = `${sym}_KL`;
+  const SYMBOL_CD = 60 * 60_000;
   if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < SYMBOL_CD) return null;
   cooldowns.set(cdKey, now);
 
-  // SL anchored to CHoCH level — invalidated if price returns past the broken level
-  const sl   = dir === 'LONG' ? choch1mEntry.level * (1 - cfg.slPct) : choch1mEntry.level * (1 + cfg.slPct);
-  const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)                : price * (1 - TP1_PCT);
-  const tp2  = dir === 'LONG' ? price * (1 + TP2_PCT)                : price * (1 - TP2_PCT);
-  const lock = dir === 'LONG' ? price * (1 + LOCK_PCT)               : price * (1 - LOCK_PCT);
+  const sl   = dir === 'LONG' ? pivot1m.price * (1 - cfg.slPct) : pivot1m.price * (1 + cfg.slPct);
+  const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)           : price * (1 - TP1_PCT);
+  const tp2  = dir === 'LONG' ? price * (1 + TP2_PCT)           : price * (1 - TP2_PCT);
+  const lock = dir === 'LONG' ? price * (1 + LOCK_PCT)          : price * (1 - LOCK_PCT);
 
   let trend = 'UNKNOWN';
   try { trend = classifyTrend(bars4h ?? []); } catch (_) {}
 
-  const pattern15 = label; // actual 15m pivot type: HH | HL | LH | LL
+  const pattern15 = label; // HH | HL | LH | LL
 
   return {
-    symbol:    sym,
-    name:      cfg.name,
-    tf:        '15m+1m',
-    iv:        cfg.iv,
-    pattern:   pattern15,
+    symbol:   sym,
+    name:     cfg.name,
+    tf:       '15m+1m',
+    iv:       cfg.iv,
+    pattern:  pattern15,
     pattern15,
     dir,
-    side:      dir === 'LONG' ? 'BUY' : 'SELL',
+    side:     dir === 'LONG' ? 'BUY' : 'SELL',
     price,
-    level:     choch1mEntry.level,
-    keyLevel:  pivot15.price,
+    level:    pivot1m.price,
+    keyLevel: pivot15.price,
     sl, tp1, tp2,
-    lockAt:    lock,
-    slPct:     (cfg.slPct * 100).toFixed(2) + '%',
-    tp1Pct:    (TP1_PCT  * 100).toFixed(2) + '%',
-    tp2Pct:    (TP2_PCT  * 100).toFixed(2) + '%',
+    lockAt:   lock,
+    slPct:    (cfg.slPct * 100).toFixed(2) + '%',
+    tp1Pct:   (TP1_PCT  * 100).toFixed(2) + '%',
+    tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
     trend,
-    pivot15m:  pivot15.price,
-    choch1m:   choch1mEntry.level,
-    chochDir:  choch1mEntry.direction,
-    ltfUsed:   '1m-CHoCH',
-    ts:        now,
-    signal:    `${label}@${pivot15.price.toFixed(4)} + 1m_${expectedChoch}_CHoCH@${choch1mEntry.level.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)}`,
+    pivot15m: pivot15.price,
+    pivot1m:  pivot1m.price,
+    ltfUsed:  '1m',
+    ts:       now,
+    signal:   `${label}@${pivot15.price.toFixed(4)} + 1m_${dir === 'SHORT' ? 'LH' : 'HL'}@${pivot1m.price.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)}`,
   };
 }
 
