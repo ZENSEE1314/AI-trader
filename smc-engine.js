@@ -1079,6 +1079,12 @@ async function analyzeSMC(symbol, log = console.log) {
 // XRP removed (49% WR — below breakeven after fees)
 // ═══════════════════════════════════════════════════════════════
 
+// ── CHoCH redirect state ─────────────────────────────────────────
+// Persists across scanKeyLevelSignal calls. When 15m structure says X but 1m CHoCH
+// says the opposite, we block X and wait for the opposite 15m structure to confirm.
+// Key: symbol  Value: { redirectDir, blockedDir, blockedAt, expiresAt }
+const _chochRedirectMap = new Map();
+
 // ── Token trading config ─────────────────────────────────────────
 // iv = entry timeframe interval (Bybit format)
 // slPct = stop-loss % from pattern level (optimized per token)
@@ -2046,6 +2052,15 @@ function _rawPivots(bars) {
   };
 }
 
+// Converts _allPivots output to the { type, price, ts } format expected by detectCHoCH.
+function _toPivotsForCHoCH(bars) {
+  const { ph, pl } = _allPivots(bars);
+  const out = [];
+  for (const p of ph) out.push({ type: 'HIGH', price: p.price, ts: p.barTs, idx: p.idx });
+  for (const p of pl) out.push({ type: 'LOW',  price: p.price, ts: p.barTs, idx: p.idx });
+  return out.sort((a, b) => a.idx - b.idx);
+}
+
 // ── _detect15mStructure ───────────────────────────────────────────────
 // Detects a complete 2-pivot trend structure on the 15m chart:
 //
@@ -2238,6 +2253,58 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     return null;
   }
   L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}`);
+
+  // ── Step 1c: 1m CHoCH direction filter ──────────────────────────────
+  // Block the signal when 1m CHoCH contradicts the 15m structure direction:
+  //   15m LL→LH (SHORT) + 1m BULLISH CHoCH → buyers stepping in → redirect to LONG
+  //   15m HH→HL (LONG)  + 1m BEARISH CHoCH → sellers stepping in → redirect to SHORT
+  //
+  // Redirect fires when the 15m structure eventually prints the opposite pattern.
+  // Expires in 4 hours to avoid staleness.
+  const CHOCH_RECENCY_MS = 90 * 60_000; // 90 min — stale CHoCH ignored
+
+  const activeRedirect = _chochRedirectMap.get(sym);
+  if (activeRedirect) {
+    if (now > activeRedirect.expiresAt) {
+      _chochRedirectMap.delete(sym);
+      L(`Step1c — CHoCH redirect expired, cleared`);
+      // Fall through — evaluate this structure fresh
+    } else if (dir !== activeRedirect.redirectDir) {
+      // 15m still printing the blocked direction — keep waiting
+      L(`Step1c REDIRECT BLOCK — waiting for ${activeRedirect.redirectDir}, current structure=${dir}`);
+      return null;
+    } else {
+      // 15m now shows the redirected direction — allow and clear
+      L(`Step1c REDIRECT ALLOW ✓ — CHoCH redirect resolved: ${dir} confirmed, proceeding`);
+      _chochRedirectMap.delete(sym);
+      // Fall through — continue to Steps 2–4 normally
+    }
+  } else {
+    // No redirect active — check fresh 1m CHoCH for a potential block+redirect
+    const choch1m = detectCHoCH(bars1m, _toPivotsForCHoCH(bars1m), 90);
+    if (choch1m) {
+      const chochAgeMs = now - choch1m.candleTs;
+      const isRecentCHoCH = chochAgeMs < CHOCH_RECENCY_MS;
+      const chochConflicts = isRecentCHoCH && (
+        (dir === 'SHORT' && choch1m.direction === 'BULLISH') ||
+        (dir === 'LONG'  && choch1m.direction === 'BEARISH')
+      );
+      if (chochConflicts) {
+        const redirectDir = dir === 'SHORT' ? 'LONG' : 'SHORT';
+        _chochRedirectMap.set(sym, {
+          redirectDir,
+          blockedDir: dir,
+          blockedAt:  now,
+          expiresAt:  now + 4 * 60 * 60_000,
+        });
+        L(`Step1c BLOCKED — 1m CHoCH=${choch1m.direction} conflicts with ${dir} → redirect to ${redirectDir} when opposite 15m structure forms`);
+        return null;
+      }
+      if (!isRecentCHoCH) {
+        L(`Step1c — 1m CHoCH=${choch1m.direction} but ${Math.round(chochAgeMs / 60_000)}m old (stale, ignoring)`);
+      }
+    }
+  }
 
   // ── STEP 2: Find 1m LH (SHORT) or 1m HL (LONG) in 30-min window ────
   // The 1m pivot must specifically be a LH (for SHORT) or HL (for LONG),
