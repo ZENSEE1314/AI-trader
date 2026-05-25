@@ -9,7 +9,9 @@ const router = express.Router();
 const ALLOWED_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT']);
 
 // POST /api/tv-webhook
-// Called by TradingView alert webhook.
+// DISABLED — all signals now flow exclusively through SMCPatternAgent (4-step rule).
+// TV webhooks bypassed the 4H trend gate and structure checks, firing wrong trades.
+// To re-enable, restore the injectTVSignal() call below and remove the early return.
 //
 // Required fields:
 //   secret, symbol, direction, price
@@ -46,6 +48,9 @@ router.post('/', (req, res) => {
   if (!entryPrice || entryPrice <= 0) {
     return res.status(400).json({ error: 'Invalid price' });
   }
+
+  // DISABLED — SMCPatternAgent is the sole signal source
+  return res.json({ ok: false, message: 'TV webhook disabled — signals flow through SMCPatternAgent only' });
 
   const isOverride = override === true || override === 'true';
 

@@ -465,7 +465,7 @@ class SMCPatternAgent extends BaseAgent {
         let openPositions = [];
         try {
           const openRows = await query("SELECT symbol, direction FROM trades WHERE status = 'OPEN'");
-          openPositions = openRows.rows.map(r => r.symbol);
+          openPositions = (Array.isArray(openRows) ? openRows : openRows.rows || []).map(r => r.symbol);
         } catch (_) {}
 
         let approved = btcFiltered;
