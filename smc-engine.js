@@ -2335,11 +2335,16 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
 
   // ── Step 1b: 4H trend gate ───────────────────────────────────────────
+  // CHoCH flip signals bypass the 4H filter — the CHoCH itself IS the trend
+  // reversal evidence. Blocking a CHoCH↑ LONG because "4H is DOWN" defeats the purpose.
+  const isChochFlip = label === 'LL→CHoCH↑' || label === 'HH→CHoCH↓';
   let trend4h = 'NEUTRAL';
   try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}
-  if (dir === 'LONG'  && trend4h === 'DOWN') { L(`Step1b FAIL — 4H DOWN, rejecting LONG`);  return null; }
-  if (dir === 'SHORT' && trend4h === 'UP')   { L(`Step1b FAIL — 4H UP, rejecting SHORT`);   return null; }
-  L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}`);
+  if (!isChochFlip) {
+    if (dir === 'LONG'  && trend4h === 'DOWN') { L(`Step1b FAIL — 4H DOWN, rejecting LONG`);  return null; }
+    if (dir === 'SHORT' && trend4h === 'UP')   { L(`Step1b FAIL — 4H UP, rejecting SHORT`);   return null; }
+  }
+  L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}${isChochFlip ? ' (CHoCH flip bypass)' : ''}`);
 
   // ── Step 1c: 1m CHoCH conflict → store redirect ──────────────────────
   // Only the 1m CHoCH triggers a flip. 15m CHoCH is NOT checked here —
@@ -2392,6 +2397,29 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     return null;
   }
   L(`Step2 PASS ✓ — 1m swing ${dir === 'SHORT' ? 'HIGH' : 'LOW'} @ ${pivot1m.price.toFixed(2)}`);
+
+  // ── STEP 2c: CHoCH flip — 1m pivot must be HL (LONG) or LH (SHORT) ──
+  // After a 15m CHoCH flip, a normal impulse candle is NOT enough — we need
+  // the 1m to confirm with a HL (Higher Low) for LONG or LH (Lower High) for SHORT.
+  // If the 1m pivot is a LL (for LONG) or HH (for SHORT), price is still running
+  // in the old direction — wait for the actual HL/LH flip to form.
+  if (isChochFlip) {
+    if (dir === 'LONG') {
+      const prevPl1 = pl1.filter(p => p.barTs < pivot1m.barTs).slice(-1)[0];
+      if (prevPl1 && pivot1m.price <= prevPl1.price) {
+        L(`Step2c FAIL — 1m LL (${pivot1m.price.toFixed(2)} <= prev ${prevPl1.price.toFixed(2)}) — need HL, waiting`);
+        return null;
+      }
+      L(`Step2c PASS ✓ — 1m HL confirmed @ ${pivot1m.price.toFixed(2)}`);
+    } else {
+      const prevPh1 = ph1.filter(p => p.barTs < pivot1m.barTs).slice(-1)[0];
+      if (prevPh1 && pivot1m.price >= prevPh1.price) {
+        L(`Step2c FAIL — 1m HH (${pivot1m.price.toFixed(2)} >= prev ${prevPh1.price.toFixed(2)}) — need LH, waiting`);
+        return null;
+      }
+      L(`Step2c PASS ✓ — 1m LH confirmed @ ${pivot1m.price.toFixed(2)}`);
+    }
+  }
 
   // ── STEP 2b: 1m pivot level must be close to 15m pivot ──────────────
   const LEVEL_TOL = cfg.slPct * 2;
