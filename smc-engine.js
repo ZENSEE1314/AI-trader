@@ -2320,25 +2320,30 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   if (dir === 'SHORT' && trend4h === 'UP')   { L(`Step1b FAIL — 4H UP, rejecting SHORT`);   return null; }
   L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}`);
 
-  // ── Step 1c: 1m CHoCH conflict → store redirect ──────────────────────
-  // Only checked when no redirect is already active (we just resolved or cleared it above).
-  // If 15m fires SHORT but 1m CHoCH is BULLISH → block SHORT, redirect to LONG.
-  // Mirror for LONG. Redirect stored for 4 h; resolves on next single 15m pivot match.
+  // ── Step 1c: CHoCH conflict (1m or 15m) → store redirect ────────────
+  // If 15m structure says SHORT but 1m or 15m CHoCH is BULLISH → block SHORT, redirect LONG.
+  // If 15m structure says LONG  but 1m or 15m CHoCH is BEARISH → block LONG,  redirect SHORT.
+  // 15m CHoCH recency window is wider (4 h) since each 15m bar is 15× longer than 1m.
   if (!_chochRedirectMap.has(sym)) {
-    const CHOCH_RECENCY_MS = 90 * 60_000;
-    const choch1m = detectCHoCH(bars1m, _toPivotsForCHoCH(bars1m), 90);
-    if (choch1m) {
-      const chochAgeMs = now - choch1m.candleTs;
-      const conflicts  = chochAgeMs < CHOCH_RECENCY_MS && (
-        (dir === 'SHORT' && choch1m.direction === 'BULLISH') ||
-        (dir === 'LONG'  && choch1m.direction === 'BEARISH')
-      );
-      if (conflicts) {
-        const redirectDir = dir === 'SHORT' ? 'LONG' : 'SHORT';
-        _chochRedirectMap.set(sym, { redirectDir, blockedDir: dir, blockedAt: now, expiresAt: now + 4 * 60 * 60_000 });
-        L(`Step1c BLOCKED — 1m CHoCH=${choch1m.direction} conflicts with ${dir} → redirect to ${redirectDir}`);
-        return null;
-      }
+    const CHOCH_1M_RECENCY  =  90 * 60_000; // 90 min for 1m CHoCH
+    const CHOCH_15M_RECENCY = 240 * 60_000; // 4 h   for 15m CHoCH
+
+    const choch1m  = detectCHoCH(bars1m,  _toPivotsForCHoCH(bars1m),  90);
+    const choch15m = detectCHoCH(bars15m, _toPivotsForCHoCH(bars15m), 20);
+
+    const conflict1m  = choch1m  && now - choch1m.candleTs  < CHOCH_1M_RECENCY  &&
+      ((dir === 'SHORT' && choch1m.direction  === 'BULLISH') || (dir === 'LONG' && choch1m.direction  === 'BEARISH'));
+    const conflict15m = choch15m && now - choch15m.candleTs < CHOCH_15M_RECENCY &&
+      ((dir === 'SHORT' && choch15m.direction === 'BULLISH') || (dir === 'LONG' && choch15m.direction === 'BEARISH'));
+
+    if (conflict1m || conflict15m) {
+      const redirectDir = dir === 'SHORT' ? 'LONG' : 'SHORT';
+      _chochRedirectMap.set(sym, { redirectDir, blockedDir: dir, blockedAt: now, expiresAt: now + 4 * 60 * 60_000 });
+      const src = conflict1m
+        ? `1m CHoCH=${choch1m.direction}`
+        : `15m CHoCH=${choch15m.direction}`;
+      L(`Step1c BLOCKED — ${src} conflicts with ${dir} → redirect to ${redirectDir}`);
+      return null;
     }
   }
 
