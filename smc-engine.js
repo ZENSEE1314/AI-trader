@@ -2007,8 +2007,8 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 //   LOW : bars[i].l < bars[i-1].l AND bars[i].l < bars[i+1].l AND bars[i].l < bars[i+2].l
 
 // ── Signal engine constants ───────────────────────────────────────────
-const STRUCT_BARS_15M  = 16;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 4 h old
-const PIVOT_FRESH_BARS = 8;         // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤8 bars = 2 h old
+const STRUCT_BARS_15M  = 60;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 15 h old
+const PIVOT_FRESH_BARS = 16;        // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤16 bars = 4 h old
 const WINDOW_MS        = 2 * 60 * 60_000; // 1m pivot must form within 2 h of the 15m pivot bar open
 const ENTRY_TOL        = 0.002;     // MUST equal slPct — entry must be within slPct% of the 1m HL/LH.
                                     // If ENTRY_TOL > slPct the SL would float above the structural HL when
@@ -2080,121 +2080,109 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, d
   if (!bars15m || bars15m.length < 6) return null;
 
   const bars15mLen = bars15m.length;
-
-  const globalMaxH = Math.max(...bars15m.map(b => b.h));
-  const globalMinL = Math.min(...bars15m.map(b => b.l));
   const EXTREME_TOL = 0.002;
 
-  const globalMinIdx = bars15m.reduce(
-    (minIdx, b, i) => b.l < bars15m[minIdx].l ? i : minIdx, 0
-  );
-  const globalMinAge = (bars15mLen - 1) - globalMinIdx;
-
   // ── SHORT: LL → LH ───────────────────────────────────────────────
-  const llPivot = pl15.reduce((min, p) => p.price < min.price ? p : min, pl15[0]);
-  const llAge   = (bars15mLen - 1) - llPivot.idx;
+  // LL = most recent pivot low that is LOWER than the previous pivot low (relative, like TradingView)
+  // NOT the global absolute minimum — that can be 100+ bars old.
+  let llPivot = null;
+  for (let i = pl15.length - 1; i >= 1; i--) {
+    const age = (bars15mLen - 1) - pl15[i].idx;
+    if (age > STRUCT_BARS_15M) break;
+    if (pl15[i].price < pl15[i - 1].price) { llPivot = pl15[i]; break; }
+  }
 
-  if (llAge <= STRUCT_BARS_15M) {
-    const prevLL = pl15.filter(p => p.barTs < llPivot.barTs).slice(-1)[0];
-    if (prevLL && llPivot.price >= prevLL.price) {
-      D(`SHORT skip: LL@${llPivot.price.toFixed(2)} >= prevLL@${prevLL.price.toFixed(2)} (HL masquerading as LL)`);
+  if (!llPivot) {
+    D(`SHORT skip: no recent LL (all lows are HL within last ${STRUCT_BARS_15M} bars)`);
+  } else {
+    const llAge = (bars15mLen - 1) - llPivot.idx;
+    // LH = most recent pivot HIGH after the LL that is LOWER than the previous pivot high
+    const phAfterLL = ph15.filter(p => p.barTs > llPivot.barTs);
+    let lhPivot = null;
+    for (let i = phAfterLL.length - 1; i >= 1; i--) {
+      if (phAfterLL[i].price < phAfterLL[i - 1].price) { lhPivot = phAfterLL[i]; break; }
+    }
+    // If no relative LH found, accept any pivot high after LL as LH candidate
+    if (!lhPivot && phAfterLL.length > 0) lhPivot = phAfterLL[phAfterLL.length - 1];
+
+    if (!lhPivot) {
+      D(`SHORT skip: no LH after LL@${llPivot.price.toFixed(2)} (llAge=${llAge})`);
     } else {
-      const lhCandidates = ph15.filter(p =>
-        p.barTs > llPivot.barTs &&
-        p.price < globalMaxH * (1 - EXTREME_TOL)
-      );
-      if (lhCandidates.length === 0) {
-        D(`SHORT skip: no LH after LL@${llPivot.price.toFixed(2)}`);
+      const lhAge = (bars15mLen - 1) - lhPivot.idx;
+      // Structure intact: no bar closed ABOVE lhPivot after it formed
+      const barsAfterLH = bars15m.filter(b => b.t > lhPivot.barTs);
+      if (barsAfterLH.some(b => b.c > lhPivot.price * (1 + EXTREME_TOL))) {
+        D(`SHORT skip: bar closed above LH@${lhPivot.price.toFixed(2)} (structure broken)`);
       } else {
-        const lh    = lhCandidates[lhCandidates.length - 1];
-        const lhAge = (bars15mLen - 1) - lh.idx;
-
-        const barsAfterLH = bars15m.filter(b => b.t > lh.barTs);
-        if (barsAfterLH.some(b => b.c > lh.price * (1 + EXTREME_TOL))) {
-          D(`SHORT skip: bar closed above LH@${lh.price.toFixed(2)} after it formed`);
+        const bouncePct = (lhPivot.price - llPivot.price) / llPivot.price;
+        if (bouncePct < slPct * 2) {
+          D(`SHORT skip: bounce too small ${(bouncePct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
+        } else if (lhAge > PIVOT_FRESH_BARS) {
+          D(`SHORT skip: LH age=${lhAge} > PIVOT_FRESH_BARS=${PIVOT_FRESH_BARS}`);
         } else {
-          const highsBeforeLL = ph15.filter(p => p.barTs < llPivot.barTs);
-          const prevHHprice   = highsBeforeLL.length > 0
-            ? Math.max(...highsBeforeLL.map(p => p.price))
-            : globalMaxH;
-          const barsInBounce  = bars15m.filter(b => b.t > llPivot.barTs && b.t < lh.barTs);
-          const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
-          if (chochHappened) {
-            D(`SHORT skip: CHoCH between LL and LH (bounce broke above prevHH@${prevHHprice.toFixed(2)})`);
-          } else {
-            const bouncePct = (lh.price - llPivot.price) / llPivot.price;
-            if (bouncePct < slPct * 2) {
-              D(`SHORT skip: bounce too small ${(bouncePct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
-            } else if (lhAge > PIVOT_FRESH_BARS) {
-              D(`SHORT skip: LH age=${lhAge} > PIVOT_FRESH_BARS=${PIVOT_FRESH_BARS}`);
-            } else {
-              return { dir: 'SHORT', pivot15: lh, preceding: llPivot, label: 'LL→LH' };
-            }
-          }
+          return { dir: 'SHORT', pivot15: lhPivot, preceding: llPivot, label: 'LL→LH' };
         }
       }
     }
-  } else {
-    D(`SHORT skip: LL age=${llAge} > STRUCT_BARS_15M=${STRUCT_BARS_15M}`);
   }
 
   // ── LONG: HH → HL ────────────────────────────────────────────────
-  if (globalMinAge <= STRUCT_BARS_15M) {
-    D(`LONG skip: recent LL globalMinAge=${globalMinAge} <= ${STRUCT_BARS_15M} (downtrend bounce guard)`);
+  // HH = most recent pivot high that is HIGHER than the previous pivot high (relative, like TradingView)
+  // NOT the global absolute maximum — that can be 100+ bars old.
+  let hhPivot = null;
+  for (let i = ph15.length - 1; i >= 1; i--) {
+    const age = (bars15mLen - 1) - ph15[i].idx;
+    if (age > STRUCT_BARS_15M) break;
+    if (ph15[i].price > ph15[i - 1].price) { hhPivot = ph15[i]; break; }
+  }
+
+  if (!hhPivot) {
+    D(`LONG skip: no recent HH (all highs are LH within last ${STRUCT_BARS_15M} bars)`);
     return null;
   }
 
-  const hhPivot  = ph15.reduce((max, p) => p.price > max.price ? p : max, ph15[0]);
-  const hhAge    = (bars15mLen - 1) - hhPivot.idx;
-
-  if (hhAge > STRUCT_BARS_15M) {
-    D(`LONG skip: HH age=${hhAge} > STRUCT_BARS_15M=${STRUCT_BARS_15M}`);
-    return null;
-  }
-
-  const prevHH = ph15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
-  if (prevHH && hhPivot.price <= prevHH.price) {
-    D(`LONG skip: HH@${hhPivot.price.toFixed(2)} <= prevHH@${prevHH.price.toFixed(2)} (LH masquerading as HH)`);
-    return null;
-  }
-
+  const hhAge = (bars15mLen - 1) - hhPivot.idx;
+  // prevHL = pivot low just before the HH (used to qualify HL)
   const prevHL = pl15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
-  const hlCandidates = pl15.filter(p =>
-    p.barTs > hhPivot.barTs &&
-    p.price > globalMinL * (1 + EXTREME_TOL) &&
-    (!prevHL || p.price > prevHL.price)
-  );
 
-  if (hlCandidates.length === 0) {
-    D(`LONG skip: no HL after HH@${hhPivot.price.toFixed(2)} (prevHL=${prevHL?.price.toFixed(2) ?? 'none'})`);
+  // HL = most recent pivot LOW after the HH that is HIGHER than the previous pivot low
+  const plAfterHH = pl15.filter(p => p.barTs > hhPivot.barTs);
+  let hlPivot = null;
+  for (let i = plAfterHH.length - 1; i >= 1; i--) {
+    if (plAfterHH[i].price > plAfterHH[i - 1].price) { hlPivot = plAfterHH[i]; break; }
+  }
+  // If no relative HL found, accept any pivot low after HH that is above prevHL
+  if (!hlPivot && plAfterHH.length > 0) {
+    hlPivot = plAfterHH[plAfterHH.length - 1];
+  }
+  // Must be above the pivot low that preceded the HH (genuine HL, not a lower low)
+  if (hlPivot && prevHL && hlPivot.price <= prevHL.price) {
+    D(`LONG skip: HL@${hlPivot.price.toFixed(2)} <= prevHL@${prevHL.price.toFixed(2)} (LL break)`);
     return null;
   }
 
-  const hl    = hlCandidates[hlCandidates.length - 1];
-  const hlAge = (bars15mLen - 1) - hl.idx;
-
-  const barsAfterHL = bars15m.filter(b => b.t > hl.barTs);
-  const structureBroken = barsAfterHL.some(b => b.c < hl.price * (1 - EXTREME_TOL));
-  if (structureBroken) {
-    D(`LONG skip: price closed below HL@${hl.price.toFixed(2)} after it formed (structure broken)`);
+  if (!hlPivot) {
+    D(`LONG skip: no HL after HH@${hhPivot.price.toFixed(2)} (hhAge=${hhAge})`);
     return null;
   }
 
-  const lowestBetween = pl15
-    .filter(p => p.barTs > hhPivot.barTs && p.barTs < hl.barTs)
-    .reduce((min, p) => p.price < min ? p.price : min, Infinity);
-  const noLLbreak = lowestBetween >= globalMinL * (1 + EXTREME_TOL);
+  const hlAge = (bars15mLen - 1) - hlPivot.idx;
 
-  const pullbackPct = (hhPivot.price - hl.price) / hhPivot.price;
+  // Structure intact: no bar closed BELOW hlPivot after it formed
+  const barsAfterHL = bars15m.filter(b => b.t > hlPivot.barTs);
+  if (barsAfterHL.some(b => b.c < hlPivot.price * (1 - EXTREME_TOL))) {
+    D(`LONG skip: bar closed below HL@${hlPivot.price.toFixed(2)} (structure broken)`);
+    return null;
+  }
+
+  const pullbackPct = (hhPivot.price - hlPivot.price) / hhPivot.price;
 
   if (hlAge > PIVOT_FRESH_BARS) {
     D(`LONG skip: HL age=${hlAge} > PIVOT_FRESH_BARS=${PIVOT_FRESH_BARS}`);
-  } else if (!noLLbreak) {
-    D(`LONG skip: LL made between HH and HL (bearish break)`);
   } else if (pullbackPct < slPct * 2) {
     D(`LONG skip: pullback too small ${(pullbackPct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
   } else {
-    return { dir: 'LONG', pivot15: hl, preceding: hhPivot, label: 'HH→HL' };
+    return { dir: 'LONG', pivot15: hlPivot, preceding: hhPivot, label: 'HH→HL' };
   }
 
   return null;
