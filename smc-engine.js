@@ -2387,10 +2387,12 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     return null;
   }
 
-  // ── STEP 3: 1m pivot freshness from NOW (≤ 30 min) ──────────────────
+  // ── STEP 3: 1m pivot freshness from NOW (≤ 10 min) ──────────────────
+  // If the 1m entry pivot is >10 bars old, the entry window already passed —
+  // price has moved away from the LH/HL level. Skip and wait for a fresh 1m pivot.
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
-  if (bars1mNowAge > 30) {
-    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 30)`);
+  if (bars1mNowAge > 10) {
+    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 10) — entry missed, reset`);
     return null;
   }
   L(`Step3 PASS ✓ — 1m pivot is ${bars1mNowAge} bars old`);
