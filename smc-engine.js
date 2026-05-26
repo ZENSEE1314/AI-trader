@@ -2109,10 +2109,17 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, d
       D(`SHORT skip: no LH after LL@${llPivot.price.toFixed(2)} (llAge=${llAge})`);
     } else {
       const lhAge = (bars15mLen - 1) - lhPivot.idx;
-      // Structure intact: no bar closed ABOVE lhPivot after it formed
+      // Structure check: did any bar close ABOVE lhPivot after it formed?
       const barsAfterLH = bars15m.filter(b => b.t > lhPivot.barTs);
-      if (barsAfterLH.some(b => b.c > lhPivot.price * (1 + EXTREME_TOL))) {
-        D(`SHORT skip: bar closed above LH@${lhPivot.price.toFixed(2)} (structure broken)`);
+      const lhBrokenUp = barsAfterLH.some(b => b.c > lhPivot.price * (1 + EXTREME_TOL));
+      if (lhBrokenUp) {
+        // LH broken UPWARD = bullish CHoCH on 15m (LL→LH context flips to LONG)
+        // The broken LH now acts as the new HL support — enter LONG from here.
+        if (lhAge <= PIVOT_FRESH_BARS) {
+          D(`LL→CHoCH↑ LONG flip: LH@${lhPivot.price.toFixed(2)} broken up (lhAge=${lhAge}) → LONG`);
+          return { dir: 'LONG', pivot15: lhPivot, preceding: llPivot, label: 'LL→CHoCH↑' };
+        }
+        D(`SHORT skip: LH broken up but too old (lhAge=${lhAge})`);
       } else {
         const bouncePct = (lhPivot.price - llPivot.price) / llPivot.price;
         if (bouncePct < slPct * 2) {
@@ -2168,10 +2175,17 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, d
 
   const hlAge = (bars15mLen - 1) - hlPivot.idx;
 
-  // Structure intact: no bar closed BELOW hlPivot after it formed
+  // Structure check: did any bar close BELOW hlPivot after it formed?
   const barsAfterHL = bars15m.filter(b => b.t > hlPivot.barTs);
-  if (barsAfterHL.some(b => b.c < hlPivot.price * (1 - EXTREME_TOL))) {
-    D(`LONG skip: bar closed below HL@${hlPivot.price.toFixed(2)} (structure broken)`);
+  const hlBrokenDown = barsAfterHL.some(b => b.c < hlPivot.price * (1 - EXTREME_TOL));
+  if (hlBrokenDown) {
+    // HL broken DOWNWARD = bearish CHoCH on 15m (HH→HL context flips to SHORT)
+    // The broken HL now acts as the new LH resistance — enter SHORT from here.
+    if (hlAge <= PIVOT_FRESH_BARS) {
+      D(`HH→CHoCH↓ SHORT flip: HL@${hlPivot.price.toFixed(2)} broken down (hlAge=${hlAge}) → SHORT`);
+      return { dir: 'SHORT', pivot15: hlPivot, preceding: hhPivot, label: 'HH→CHoCH↓' };
+    }
+    D(`LONG skip: HL broken down but too old (hlAge=${hlAge})`);
     return null;
   }
 
