@@ -2293,24 +2293,16 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
       if (!st) return null;
       ({ dir, pivot15, label } = st);
     } else {
-      // Redirect active — after CHoCH flips direction, accept ANY swing high (HH or LH) for
-      // SHORT redirect, and ANY swing low (HL or LL) for LONG redirect.
-      // A HH after a bearish CHoCH is still a valid SHORT anchor (failed breakout / weak high).
+      // Redirect active — wait for a single 15m pivot that matches the redirect direction.
+      // SHORT redirect resolves on LH (lower high), LONG redirect resolves on HL (higher low).
+      // The trade then fires on the 1m flip: LH or HH for SHORT, HL or LL for LONG (Step 2).
       const single = _detect15mPivot(ph15, pl15, bars15m.length);
-      const isHighPivot = single && (single.label === 'HH' || single.label === 'LH');
-      const isLowPivot  = single && (single.label === 'HL' || single.label === 'LL');
-      const resolves = single && (
-        (activeRedirect.redirectDir === 'SHORT' && isHighPivot) ||
-        (activeRedirect.redirectDir === 'LONG'  && isLowPivot)
-      );
-      if (resolves) {
+      if (single && single.dir === activeRedirect.redirectDir) {
         _chochRedirectMap.delete(sym);
         L(`Step1 REDIRECT ALLOW ✓ — ${single.label} on 15m resolves redirect to ${activeRedirect.redirectDir}`);
-        dir     = activeRedirect.redirectDir;
-        pivot15 = single.pivot15;
-        label   = single.label;
+        ({ dir, pivot15, label } = single);
       } else {
-        const need = activeRedirect.redirectDir === 'SHORT' ? 'LH or HH' : 'HL or LL';
+        const need = activeRedirect.redirectDir === 'SHORT' ? 'LH' : 'HL';
         L(`Step1 REDIRECT BLOCK — waiting for 15m ${need} to ${activeRedirect.redirectDir}`);
         return null;
       }
