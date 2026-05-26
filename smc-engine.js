@@ -2074,121 +2074,130 @@ function _toPivotsForCHoCH(bars) {
 // Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
 // minBouncePct: pass 0 — 2L/2R pivot detection on 15m candles is the sole judge.
 // The lowest candle in a 60-min window IS the HL; no artificial % filter on top.
-function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002) {
-  if (ph15.length < 2 || pl15.length < 2) return null;
+function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, dbg = null) {
+  const D = (msg) => dbg && dbg(msg);
+  if (ph15.length < 2 || pl15.length < 2) { D(`15m-struct: not enough pivots ph=${ph15.length} pl=${pl15.length}`); return null; }
   if (!bars15m || bars15m.length < 6) return null;
 
   const bars15mLen = bars15m.length;
 
-  // Use actual candle data for global extremes — catches spiky moves that aren't 2L/2R pivots.
-  // This prevents treating a local LH as HH when an older HH candle exists in the window.
   const globalMaxH = Math.max(...bars15m.map(b => b.h));
   const globalMinL = Math.min(...bars15m.map(b => b.l));
-  const EXTREME_TOL = 0.002; // 0.2% — candle must be within this of true extreme to count
+  const EXTREME_TOL = 0.002;
 
-  // Index of the bar containing the global minimum low (for LONG guard below)
   const globalMinIdx = bars15m.reduce(
     (minIdx, b, i) => b.l < bars15m[minIdx].l ? i : minIdx, 0
   );
   const globalMinAge = (bars15mLen - 1) - globalMinIdx;
 
   // ── SHORT: LL → LH ───────────────────────────────────────────────
-  // Find the TRUE LL: pivot low nearest the global candle minimum.
-  // Then find the most recent pivot HIGH after it that is a genuine LH
-  // (below the global candle max — not the new HH).
-  // llPivot must also be LOWER than the previous pivot low (genuine LL, not HL bounce).
   const llPivot = pl15.reduce((min, p) => p.price < min.price ? p : min, pl15[0]);
   const llAge   = (bars15mLen - 1) - llPivot.idx;
 
   if (llAge <= STRUCT_BARS_15M) {
-    // llPivot must be lower than the pivot low before it (real LL, not a HL in uptrend)
     const prevLL = pl15.filter(p => p.barTs < llPivot.barTs).slice(-1)[0];
-    if (prevLL && llPivot.price >= prevLL.price) return null; // HL masquerading as LL → no SHORT
+    if (prevLL && llPivot.price >= prevLL.price) {
+      D(`SHORT skip: LL@${llPivot.price.toFixed(2)} >= prevLL@${prevLL.price.toFixed(2)} (HL masquerading as LL)`);
+    } else {
+      const lhCandidates = ph15.filter(p =>
+        p.barTs > llPivot.barTs &&
+        p.price < globalMaxH * (1 - EXTREME_TOL)
+      );
+      if (lhCandidates.length === 0) {
+        D(`SHORT skip: no LH after LL@${llPivot.price.toFixed(2)}`);
+      } else {
+        const lh    = lhCandidates[lhCandidates.length - 1];
+        const lhAge = (bars15mLen - 1) - lh.idx;
 
-    const lhCandidates = ph15.filter(p =>
-      p.barTs > llPivot.barTs &&                        // LH formed AFTER the LL
-      p.price < globalMaxH * (1 - EXTREME_TOL)          // NOT the global max → genuine LH
-    );
-    if (lhCandidates.length > 0) {
-      const lh    = lhCandidates[lhCandidates.length - 1]; // most recent valid LH
-      const lhAge = (bars15mLen - 1) - lh.idx;
-
-      // After LH forms, no 15m bar should have closed ABOVE the LH (structure still intact)
-      const barsAfterLH = bars15m.filter(b => b.t > lh.barTs);
-      if (barsAfterLH.some(b => b.c > lh.price * (1 + EXTREME_TOL))) return null;
-
-      // CHoCH guard: if the bounce from LL to LH broke above the last pivot high
-      // that existed BEFORE the LL, a CHoCH (trend flip) happened in between.
-      // LL + CHoCH + LH = ambiguous structure → user rule: reset, no trade.
-      const highsBeforeLL = ph15.filter(p => p.barTs < llPivot.barTs);
-      const prevHHprice   = highsBeforeLL.length > 0
-        ? Math.max(...highsBeforeLL.map(p => p.price))
-        : globalMaxH; // no prior high → use global max as guard level
-      const barsInBounce  = bars15m.filter(b => b.t > llPivot.barTs && b.t < lh.barTs);
-      const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
-      if (chochHappened) return null; // CHoCH between LL and LH → reset
-
-      // Minimum bounce: LL→LH must span at least 2×slPct or the range is too tight
-      // (a ranging market produces many micro LL→LH patterns that aren't real downtrends)
-      const bouncePct = (lh.price - llPivot.price) / llPivot.price;
-      if (bouncePct < slPct * 2) return null;
-
-      if (lhAge <= PIVOT_FRESH_BARS) {
-        return { dir: 'SHORT', pivot15: lh, preceding: llPivot, label: 'LL→LH' };
+        const barsAfterLH = bars15m.filter(b => b.t > lh.barTs);
+        if (barsAfterLH.some(b => b.c > lh.price * (1 + EXTREME_TOL))) {
+          D(`SHORT skip: bar closed above LH@${lh.price.toFixed(2)} after it formed`);
+        } else {
+          const highsBeforeLL = ph15.filter(p => p.barTs < llPivot.barTs);
+          const prevHHprice   = highsBeforeLL.length > 0
+            ? Math.max(...highsBeforeLL.map(p => p.price))
+            : globalMaxH;
+          const barsInBounce  = bars15m.filter(b => b.t > llPivot.barTs && b.t < lh.barTs);
+          const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
+          if (chochHappened) {
+            D(`SHORT skip: CHoCH between LL and LH (bounce broke above prevHH@${prevHHprice.toFixed(2)})`);
+          } else {
+            const bouncePct = (lh.price - llPivot.price) / llPivot.price;
+            if (bouncePct < slPct * 2) {
+              D(`SHORT skip: bounce too small ${(bouncePct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
+            } else if (lhAge > PIVOT_FRESH_BARS) {
+              D(`SHORT skip: LH age=${lhAge} > PIVOT_FRESH_BARS=${PIVOT_FRESH_BARS}`);
+            } else {
+              return { dir: 'SHORT', pivot15: lh, preceding: llPivot, label: 'LL→LH' };
+            }
+          }
+        }
       }
     }
+  } else {
+    D(`SHORT skip: LL age=${llAge} > STRUCT_BARS_15M=${STRUCT_BARS_15M}`);
   }
 
   // ── LONG: HH → HL ────────────────────────────────────────────────
-  // LONG rules (all must pass):
-  //   1. No recent LL (globalMinAge > STRUCT_BARS_15M) — avoids bounce in downtrend
-  //   2. hhPivot must be HIGHER than the previous pivot high (genuine HH, not a LH)
-  //   3. HL must form AFTER the HH and be ABOVE the pivot low that preceded the HH
-  //      (genuine HL — price respected the prior low)
-  //   4. After HL forms, no 15m bar closed BELOW the HL (structure still intact)
-  //   5. No LL break between HH and HL (bearish structure break)
-  if (globalMinAge <= STRUCT_BARS_15M) return null; // recent LL → reversal bounce → no LONG
+  if (globalMinAge <= STRUCT_BARS_15M) {
+    D(`LONG skip: recent LL globalMinAge=${globalMinAge} <= ${STRUCT_BARS_15M} (downtrend bounce guard)`);
+    return null;
+  }
 
   const hhPivot  = ph15.reduce((max, p) => p.price > max.price ? p : max, ph15[0]);
   const hhAge    = (bars15mLen - 1) - hhPivot.idx;
 
-  if (hhAge <= STRUCT_BARS_15M) {
-    // Rule 2: hhPivot must be higher than the pivot high before it (real HH, not LH)
-    const prevHH = ph15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
-    if (prevHH && hhPivot.price <= prevHH.price) return null; // LH masquerading as HH → no LONG
-
-    // Rule 3: HL must be above the pivot low that preceded the HH
-    const prevHL = pl15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
-
-    const hlCandidates = pl15.filter(p =>
-      p.barTs > hhPivot.barTs &&                              // HL formed AFTER the HH
-      p.price > globalMinL * (1 + EXTREME_TOL) &&            // NOT the global min → genuine HL
-      (!prevHL || p.price > prevHL.price)                     // above the prior swing low (real HL)
-    );
-    if (hlCandidates.length > 0) {
-      const hl    = hlCandidates[hlCandidates.length - 1]; // most recent valid HL
-      const hlAge = (bars15mLen - 1) - hl.idx;
-
-      // Rule 4: After HL formed, no 15m bar closed BELOW HL — structure must still be intact
-      const barsAfterHL = bars15m.filter(b => b.t > hl.barTs);
-      const structureBroken = barsAfterHL.some(b => b.c < hl.price * (1 - EXTREME_TOL));
-      if (structureBroken) return null; // price already broke below HL → no LONG
-
-      // Rule 5: Reject if a LL was made between HH and HL (bearish structure break)
-      const lowestBetween = pl15
-        .filter(p => p.barTs > hhPivot.barTs && p.barTs < hl.barTs)
-        .reduce((min, p) => p.price < min ? p.price : min, Infinity);
-      const noLLbreak = lowestBetween >= globalMinL * (1 + EXTREME_TOL);
-
-      // Minimum pullback: HH→HL must span at least 2×slPct or the range is too tight
-      const pullbackPct = (hhPivot.price - hl.price) / hhPivot.price;
-      if (hlAge <= PIVOT_FRESH_BARS && noLLbreak && pullbackPct >= slPct * 2) {
-        return { dir: 'LONG', pivot15: hl, preceding: hhPivot, label: 'HH→HL' };
-      }
-    }
+  if (hhAge > STRUCT_BARS_15M) {
+    D(`LONG skip: HH age=${hhAge} > STRUCT_BARS_15M=${STRUCT_BARS_15M}`);
+    return null;
   }
 
-  return null; // sideways / incomplete structure → no trade
+  const prevHH = ph15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
+  if (prevHH && hhPivot.price <= prevHH.price) {
+    D(`LONG skip: HH@${hhPivot.price.toFixed(2)} <= prevHH@${prevHH.price.toFixed(2)} (LH masquerading as HH)`);
+    return null;
+  }
+
+  const prevHL = pl15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
+  const hlCandidates = pl15.filter(p =>
+    p.barTs > hhPivot.barTs &&
+    p.price > globalMinL * (1 + EXTREME_TOL) &&
+    (!prevHL || p.price > prevHL.price)
+  );
+
+  if (hlCandidates.length === 0) {
+    D(`LONG skip: no HL after HH@${hhPivot.price.toFixed(2)} (prevHL=${prevHL?.price.toFixed(2) ?? 'none'})`);
+    return null;
+  }
+
+  const hl    = hlCandidates[hlCandidates.length - 1];
+  const hlAge = (bars15mLen - 1) - hl.idx;
+
+  const barsAfterHL = bars15m.filter(b => b.t > hl.barTs);
+  const structureBroken = barsAfterHL.some(b => b.c < hl.price * (1 - EXTREME_TOL));
+  if (structureBroken) {
+    D(`LONG skip: price closed below HL@${hl.price.toFixed(2)} after it formed (structure broken)`);
+    return null;
+  }
+
+  const lowestBetween = pl15
+    .filter(p => p.barTs > hhPivot.barTs && p.barTs < hl.barTs)
+    .reduce((min, p) => p.price < min ? p.price : min, Infinity);
+  const noLLbreak = lowestBetween >= globalMinL * (1 + EXTREME_TOL);
+
+  const pullbackPct = (hhPivot.price - hl.price) / hhPivot.price;
+
+  if (hlAge > PIVOT_FRESH_BARS) {
+    D(`LONG skip: HL age=${hlAge} > PIVOT_FRESH_BARS=${PIVOT_FRESH_BARS}`);
+  } else if (!noLLbreak) {
+    D(`LONG skip: LL made between HH and HL (bearish break)`);
+  } else if (pullbackPct < slPct * 2) {
+    D(`LONG skip: pullback too small ${(pullbackPct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
+  } else {
+    return { dir: 'LONG', pivot15: hl, preceding: hhPivot, label: 'HH→HL' };
+  }
+
+  return null;
 }
 
 // ── _detect15mPivot ───────────────────────────────────────────────────
@@ -2289,7 +2298,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
       // Redirect expired — fall back to normal two-pivot check
       _chochRedirectMap.delete(sym);
       L(`Step1 — CHoCH redirect expired, cleared`);
-      const st = _detect15mStructure(ph15, pl15, bars15m, 0, cfg.slPct);
+      const st = _detect15mStructure(ph15, pl15, bars15m, 0, cfg.slPct, L);
       if (!st) return null;
       ({ dir, pivot15, label } = st);
     } else {
