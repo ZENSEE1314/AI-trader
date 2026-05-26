@@ -2331,29 +2331,24 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   if (dir === 'SHORT' && trend4h === 'UP')   { L(`Step1b FAIL — 4H UP, rejecting SHORT`);   return null; }
   L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}`);
 
-  // ── Step 1c: CHoCH conflict (1m or 15m) → store redirect ────────────
-  // If 15m structure says SHORT but 1m or 15m CHoCH is BULLISH → block SHORT, redirect LONG.
-  // If 15m structure says LONG  but 1m or 15m CHoCH is BEARISH → block LONG,  redirect SHORT.
-  // 15m CHoCH recency window is wider (4 h) since each 15m bar is 15× longer than 1m.
+  // ── Step 1c: 1m CHoCH conflict → store redirect ──────────────────────
+  // Only the 1m CHoCH triggers a flip. 15m CHoCH is NOT checked here —
+  // 15m structure is already the signal source, so checking 15m CHoCH
+  // would double-filter the same timeframe.
+  // If 15m structure says SHORT but 1m CHoCH is BULLISH → block SHORT, redirect LONG.
+  // If 15m structure says LONG  but 1m CHoCH is BEARISH → block LONG,  redirect SHORT.
   if (!_chochRedirectMap.has(sym)) {
-    const CHOCH_1M_RECENCY  =  90 * 60_000; // 90 min for 1m CHoCH
-    const CHOCH_15M_RECENCY = 240 * 60_000; // 4 h   for 15m CHoCH
+    const CHOCH_1M_RECENCY = 90 * 60_000; // 90 min
 
-    const choch1m  = detectCHoCH(bars1m,  _toPivotsForCHoCH(bars1m),  90);
-    const choch15m = detectCHoCH(bars15m, _toPivotsForCHoCH(bars15m), 20);
+    const choch1m = detectCHoCH(bars1m, _toPivotsForCHoCH(bars1m), 90);
 
-    const conflict1m  = choch1m  && now - choch1m.candleTs  < CHOCH_1M_RECENCY  &&
-      ((dir === 'SHORT' && choch1m.direction  === 'BULLISH') || (dir === 'LONG' && choch1m.direction  === 'BEARISH'));
-    const conflict15m = choch15m && now - choch15m.candleTs < CHOCH_15M_RECENCY &&
-      ((dir === 'SHORT' && choch15m.direction === 'BULLISH') || (dir === 'LONG' && choch15m.direction === 'BEARISH'));
+    const conflict1m = choch1m && now - choch1m.candleTs < CHOCH_1M_RECENCY &&
+      ((dir === 'SHORT' && choch1m.direction === 'BULLISH') || (dir === 'LONG' && choch1m.direction === 'BEARISH'));
 
-    if (conflict1m || conflict15m) {
+    if (conflict1m) {
       const redirectDir = dir === 'SHORT' ? 'LONG' : 'SHORT';
       _chochRedirectMap.set(sym, { redirectDir, blockedDir: dir, blockedAt: now, expiresAt: now + 4 * 60 * 60_000 });
-      const src = conflict1m
-        ? `1m CHoCH=${choch1m.direction}`
-        : `15m CHoCH=${choch15m.direction}`;
-      L(`Step1c BLOCKED — ${src} conflicts with ${dir} → redirect to ${redirectDir}`);
+      L(`Step1c BLOCKED — 1m CHoCH=${choch1m.direction} conflicts with ${dir} → redirect to ${redirectDir}`);
       return null;
     }
   }
