@@ -2342,7 +2342,10 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     }
   }
 
-  // ── STEP 2: Find 1m HL (LONG) or LH (SHORT) within WINDOW_MS of 15m pivot ──
+  // ── STEP 2: Find 1m swing HIGH (LH or HH) for SHORT, swing LOW (HL or LL) for LONG ──
+  // Accept any confirmed 1m pivot in the right direction — HH and LH both anchor a SHORT;
+  // HL and LL both anchor a LONG. Pick the highest high (SHORT) or lowest low (LONG)
+  // within WINDOW_MS of the 15m pivot bar to get the best structural level.
   const { ph: ph1, pl: pl1 } = _allPivots(bars1m);
   let pivot1m = null;
 
@@ -2351,7 +2354,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
       const diff = ph1[i].barTs - pivot15.barTs;
       if (diff < 0) break;
       if (diff > WINDOW_MS) continue;
-      if (ph1[i].price >= ph1[i - 1].price) continue; // not a LH — skip
+      // Accept LH or HH — any 1m swing high is a valid SHORT anchor
       if (!pivot1m || ph1[i].price > pivot1m.price) pivot1m = ph1[i];
     }
   } else {
@@ -2359,15 +2362,15 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
       const diff = pl1[i].barTs - pivot15.barTs;
       if (diff < 0) break;
       if (diff > WINDOW_MS) continue;
-      if (pl1[i].price <= pl1[i - 1].price) continue; // not a HL — skip
+      // Accept HL or LL — any 1m swing low is a valid LONG anchor
       if (!pivot1m || pl1[i].price < pivot1m.price) pivot1m = pl1[i];
     }
   }
   if (!pivot1m) {
-    L(`Step2 WAIT — no 1m ${dir === 'SHORT' ? 'LH' : 'HL'} within window of 15m pivot`);
+    L(`Step2 WAIT — no 1m swing ${dir === 'SHORT' ? 'HIGH' : 'LOW'} within window of 15m pivot`);
     return null;
   }
-  L(`Step2 PASS ✓ — 1m ${dir === 'SHORT' ? 'LH' : 'HL'} @ ${pivot1m.price.toFixed(2)}`);
+  L(`Step2 PASS ✓ — 1m swing ${dir === 'SHORT' ? 'HIGH' : 'LOW'} @ ${pivot1m.price.toFixed(2)}`);
 
   // ── STEP 2b: 1m pivot level must be close to 15m pivot ──────────────
   const LEVEL_TOL = cfg.slPct * 2;
