@@ -2318,7 +2318,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     }
   } else {
     // Normal path: require full two-pivot sequence
-    const st = _detect15mStructure(ph15, pl15, bars15m, 0, cfg.slPct);
+    const st = _detect15mStructure(ph15, pl15, bars15m, 0, cfg.slPct, L);
     if (!st) {
       const lastH = ph15.length ? ph15[ph15.length - 1] : null;
       const lastL = pl15.length ? pl15[pl15.length - 1] : null;
