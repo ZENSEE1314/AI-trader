@@ -2096,31 +2096,51 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, d
     D(`SHORT skip: no recent LL (all lows are HL within last ${STRUCT_BARS_15M} bars)`);
   } else {
     const llAge = (bars15mLen - 1) - llPivot.idx;
-    // LH = most recent pivot HIGH after the LL that is LOWER than the previous pivot high
     const phAfterLL = ph15.filter(p => p.barTs > llPivot.barTs);
+
+    // Find most recent CONFIRMED relative LH (lower than its predecessor).
+    // Do NOT fall back to the last HH — a HH broken upward is not a CHoCH,
+    // it is just price trending up from the LL (uptrend continuation).
+    // CHoCH flip is only valid on a CONFIRMED relative LH being broken.
     let lhPivot = null;
+    let lhIsRelative = false;
     for (let i = phAfterLL.length - 1; i >= 1; i--) {
-      if (phAfterLL[i].price < phAfterLL[i - 1].price) { lhPivot = phAfterLL[i]; break; }
+      if (phAfterLL[i].price < phAfterLL[i - 1].price) {
+        lhPivot = phAfterLL[i];
+        lhIsRelative = true;
+        break;
+      }
     }
-    // If no relative LH found, accept any pivot high after LL as LH candidate
-    if (!lhPivot && phAfterLL.length > 0) lhPivot = phAfterLL[phAfterLL.length - 1];
+    // Fallback only when there is a single pivot after LL (can't determine relative yet).
+    // In this case accept it as LH candidate for SHORT, but NOT for CHoCH flip.
+    if (!lhPivot && phAfterLL.length === 1) {
+      lhPivot = phAfterLL[0];
+      lhIsRelative = false;
+    }
 
     if (!lhPivot) {
-      D(`SHORT skip: no LH after LL@${llPivot.price.toFixed(2)} (llAge=${llAge})`);
+      if (phAfterLL.length >= 2) {
+        D(`SHORT skip: all ${phAfterLL.length} pivot highs after LL are HHs — uptrend, wait for LH`);
+      } else {
+        D(`SHORT skip: no pivot high after LL@${llPivot.price.toFixed(2)} (llAge=${llAge})`);
+      }
     } else {
       const lhAge = (bars15mLen - 1) - lhPivot.idx;
       // Structure check: did any bar close ABOVE lhPivot after it formed?
       const barsAfterLH = bars15m.filter(b => b.t > lhPivot.barTs);
       const lhBrokenUp = barsAfterLH.some(b => b.c > lhPivot.price * (1 + EXTREME_TOL));
-      if (lhBrokenUp) {
-        // LH broken UPWARD = bullish CHoCH on 15m (LL→LH context flips to LONG)
-        // The broken LH now acts as the new HL support — enter LONG from here.
+      if (lhBrokenUp && lhIsRelative) {
+        // CONFIRMED relative LH broken UPWARD = 15m bullish CHoCH → flip to LONG.
         if (lhAge <= PIVOT_FRESH_BARS) {
           D(`LL→CHoCH↑ LONG flip: LH@${lhPivot.price.toFixed(2)} broken up (lhAge=${lhAge}) → LONG`);
           return { dir: 'LONG', pivot15: lhPivot, preceding: llPivot, label: 'LL→CHoCH↑' };
         }
-        D(`SHORT skip: LH broken up but too old (lhAge=${lhAge})`);
+        D(`SHORT skip: relative LH broken up but too old (lhAge=${lhAge})`);
+      } else if (lhBrokenUp && !lhIsRelative) {
+        // Single/fallback pivot broken up = HH continuation, NOT a CHoCH — skip, no flip.
+        D(`SHORT skip: single pivot after LL broken upward (HH continuation, not CHoCH)`);
       } else {
+        // LH intact — SHORT entry at the LH.
         const bouncePct = (lhPivot.price - llPivot.price) / llPivot.price;
         if (bouncePct < slPct * 2) {
           D(`SHORT skip: bounce too small ${(bouncePct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
@@ -2449,8 +2469,10 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     return null;
   }
 
-  // ── Cooldown: each 15m pivot bar fires at most once ──────────────────
-  const cdKey = `${sym}_KL`;
+  // ── Cooldown: each 15m pivot LEVEL fires at most once ───────────────
+  // Use pivot15.barTs so a CHoCH LONG at pivot A does not block a SHORT at pivot B.
+  // Different pivot levels are independent setups — only the same level is deduplicated.
+  const cdKey = `${sym}_KL_${pivot15.barTs}`;
   const SYMBOL_CD = 60 * 60_000;
   if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < SYMBOL_CD) return null;
   cooldowns.set(cdKey, now);
