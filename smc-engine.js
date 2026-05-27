@@ -2080,87 +2080,63 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, d
   if (!bars15m || bars15m.length < 6) return null;
 
   const bars15mLen = bars15m.length;
-  const EXTREME_TOL = 0.002;
 
-  // ── SHORT: LL → LH ───────────────────────────────────────────────
-  // LL = most recent pivot low that is LOWER than the previous pivot low (relative, like TradingView)
-  // NOT the global absolute minimum — that can be 100+ bars old.
-  let llPivot = null;
-  for (let i = pl15.length - 1; i >= 1; i--) {
-    const age = (bars15mLen - 1) - pl15[i].idx;
-    if (age > STRUCT_BARS_15M) break;
-    if (pl15[i].price < pl15[i - 1].price) { llPivot = pl15[i]; break; }
-  }
+  // Use the last 2 adjacent pivot highs and lows — this is how the TradingView SMC
+  // indicator determines HH/LH/HL/LL. It correctly captures the CURRENT trend's
+  // HH (not the global max from 50h ago) and the CURRENT LL (not a stale global min).
+  const lastH = ph15[ph15.length - 1];  // most recent confirmed 15m pivot HIGH
+  const prevH = ph15[ph15.length - 2];  // previous confirmed 15m pivot HIGH
+  const lastL = pl15[pl15.length - 1];  // most recent confirmed 15m pivot LOW
+  const prevL = pl15[pl15.length - 2];  // previous confirmed 15m pivot LOW
 
-  if (!llPivot) {
-    D(`SHORT skip: no recent LL (all lows are HL within last ${STRUCT_BARS_15M} bars)`);
-  } else {
-    const llAge = (bars15mLen - 1) - llPivot.idx;
-    const phAfterLL = ph15.filter(p => p.barTs > llPivot.barTs);
+  const lastHAge = (bars15mLen - 1) - lastH.idx;
+  const lastLAge = (bars15mLen - 1) - lastL.idx;
 
-    // Find most recent CONFIRMED relative LH (lower than its predecessor).
-    // Do NOT fall back to the last HH — a HH broken upward is not a CHoCH,
-    // it is just price trending up from the LL (uptrend continuation).
-    // CHoCH flip is only valid on a CONFIRMED relative LH being broken.
-    let lhPivot = null;
-    let lhIsRelative = false;
-    for (let i = phAfterLL.length - 1; i >= 1; i--) {
-      if (phAfterLL[i].price < phAfterLL[i - 1].price) {
-        lhPivot = phAfterLL[i];
-        lhIsRelative = true;
-        break;
-      }
-    }
-    // Fallback only when there is a single pivot after LL (can't determine relative yet).
-    // In this case accept it as LH candidate for SHORT, but NOT for CHoCH flip.
-    if (!lhPivot && phAfterLL.length === 1) {
-      lhPivot = phAfterLL[0];
-      lhIsRelative = false;
-    }
+  // ── SHORT: LL → LH ────────────────────────────────────────────────
+  // LH = most recent pivot HIGH is lower than the one before it
+  // LL = most recent pivot LOW (before the LH) is lower than the one before it
+  const isLH = lastH.price < prevH.price;
 
-    if (!lhPivot) {
-      if (phAfterLL.length >= 2) {
-        D(`SHORT skip: all ${phAfterLL.length} pivot highs after LL are HHs — uptrend, wait for LH`);
-      } else {
-        D(`SHORT skip: no pivot high after LL@${llPivot.price.toFixed(2)} (llAge=${llAge})`);
-      }
-    } else {
-      const lhAge = (bars15mLen - 1) - lhPivot.idx;
-      // Structure check: did any bar close ABOVE lhPivot after it formed?
-      const barsAfterLH = bars15m.filter(b => b.t > lhPivot.barTs);
-      const lhBrokenUp = barsAfterLH.some(b => b.c > lhPivot.price * (1 + EXTREME_TOL));
-      if (lhBrokenUp && lhIsRelative) {
-        // CONFIRMED relative LH broken UPWARD = 15m bullish CHoCH → flip to LONG.
-        if (lhAge <= PIVOT_FRESH_BARS) {
-          D(`LL→CHoCH↑ LONG flip: LH@${lhPivot.price.toFixed(2)} broken up (lhAge=${lhAge}) → LONG`);
-          return { dir: 'LONG', pivot15: lhPivot, preceding: llPivot, label: 'LL→CHoCH↑' };
-        }
-        D(`SHORT skip: relative LH broken up but too old (lhAge=${lhAge})`);
-      } else if (lhBrokenUp && !lhIsRelative) {
-        // Single/fallback pivot broken up = HH continuation, NOT a CHoCH — skip, no flip.
-        D(`SHORT skip: single pivot after LL broken upward (HH continuation, not CHoCH)`);
-      } else {
-        // LH intact — SHORT entry at the LH.
-        const bouncePct = (lhPivot.price - llPivot.price) / llPivot.price;
-        if (bouncePct < slPct * 2) {
-          D(`SHORT skip: bounce too small ${(bouncePct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
-        } else if (lhAge > PIVOT_FRESH_BARS) {
-          D(`SHORT skip: LH age=${lhAge} > PIVOT_FRESH_BARS=${PIVOT_FRESH_BARS}`);
-        } else {
-          return { dir: 'SHORT', pivot15: lhPivot, preceding: llPivot, label: 'LL→LH' };
-        }
+  if (isLH && lastH.barTs > lastL.barTs) {
+    const isLL  = lastL.price < prevL.price;
+    const lhAge = lastHAge;
+    const llAge = lastLAge;
+
+    if (isLL && lhAge <= PIVOT_FRESH_BARS && llAge <= STRUCT_BARS_15M) {
+      // CHoCH guard: bounce from LL to LH broke prior pivot high → ambiguous → no SHORT
+      const highsBeforeLL = ph15.filter(p => p.barTs < lastL.barTs);
+      const prevHHprice   = highsBeforeLL.length > 0
+        ? Math.max(...highsBeforeLL.map(p => p.price))
+        : prevH.price;
+      const barsInBounce  = bars15m.filter(b => b.t > lastL.barTs && b.t < lastH.barTs);
+      const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
+      if (chochHappened) return null;
+
+      // Minimum bounce: LL→LH must span ≥ 2×slPct (filters ranging micro-patterns)
+      const bouncePct = (lastH.price - lastL.price) / lastL.price;
+      if (bouncePct >= slPct * 2) {
+        return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
       }
     }
   }
 
   // ── LONG: HH → HL ────────────────────────────────────────────────
-  // HH = most recent pivot high that is HIGHER than the previous pivot high (relative, like TradingView)
-  // NOT the global absolute maximum — that can be 100+ bars old.
-  let hhPivot = null;
-  for (let i = ph15.length - 1; i >= 1; i--) {
-    const age = (bars15mLen - 1) - ph15[i].idx;
-    if (age > STRUCT_BARS_15M) break;
-    if (ph15[i].price > ph15[i - 1].price) { hhPivot = ph15[i]; break; }
+  // HL = most recent pivot LOW is higher than the one before it
+  // HH = most recent pivot HIGH (before the HL) is higher than the one before it
+  const isHL = lastL.price > prevL.price;
+
+  if (isHL && lastL.barTs > lastH.barTs) {
+    const isHH  = lastH.price > prevH.price;
+    const hlAge = lastLAge;
+    const hhAge = lastHAge;
+
+    if (isHH && hlAge <= PIVOT_FRESH_BARS && hhAge <= STRUCT_BARS_15M) {
+      // Minimum pullback: HH→HL must span ≥ 2×slPct (filters ranging micro-patterns)
+      const pullbackPct = (lastH.price - lastL.price) / lastH.price;
+      if (pullbackPct >= slPct * 2) {
+        return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
+      }
+    }
   }
 
   if (!hhPivot) {
