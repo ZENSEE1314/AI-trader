@@ -1104,7 +1104,7 @@ const TRADING_CONFIG = {
 };
 
 // ── TP / lock constants (same for all tokens) ────────────────────
-const TP1_PCT   = 0.005;   // 0.5%  — close 50% of position at TP1
+const TP1_PCT   = 0.003;   // 0.3%  — close 50% of position at TP1 (tightened: natural move ~0.25-0.30%)
 const TP2_PCT   = 0.010;   // 1.0%  — close remaining 50% at TP2
 const LOCK_PCT  = 0.0025;  // +0.25% — slide SL to lock after TP1 hit
 const PAT_TOL   = 0.002;   // 0.2% proximity to pattern level — tight so bot enters AT the LH/HL, not after price already moved away
