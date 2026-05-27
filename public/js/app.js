@@ -436,6 +436,7 @@
           .catch(() => renderWallets({ balance: 0, wallets: [] }));
 
         loadTrades();
+        startTradesAutoRefresh();
         loadSignalBoard();
         loadPauseStatus();
         loadKronosPredictions();
@@ -746,6 +747,22 @@
     const totalLost = parseFloat(s.total_lost) || 0;
     els.summaryTotalWon.textContent = `+$${totalWon.toFixed(2)}`;
     els.summaryTotalLost.textContent = `-$${Math.abs(totalLost).toFixed(2)}`;
+  }
+
+  // Auto-refresh trades every 60s so history stays current without manual sync
+  let _tradesRefreshTimer = null;
+
+  function startTradesAutoRefresh() {
+    stopTradesAutoRefresh();
+    _tradesRefreshTimer = setInterval(() => {
+      if (state.currentTab === 'dashboard') {
+        loadTrades().catch(() => {});
+      }
+    }, 60_000);
+  }
+
+  function stopTradesAutoRefresh() {
+    if (_tradesRefreshTimer) { clearInterval(_tradesRefreshTimer); _tradesRefreshTimer = null; }
   }
 
   async function loadTrades() {

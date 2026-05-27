@@ -1359,7 +1359,7 @@ async function main() {
 
   // ── Maintenance & Sync ───────────────────────────────────────
   const now = Date.now();
-  if (!lastBitunixSync || now - lastBitunixSync > 12 * 60 * 60 * 1000) {
+  if (!lastBitunixSync || now - lastBitunixSync > 30 * 60_000) {
     bLog.info('Running periodic Bitunix trade history sync...');
     try {
       const { AccountantAgent } = require('./agents/accountant-agent');
@@ -1524,13 +1524,12 @@ async function main() {
     //        BELOW_LOWER + any HL/LL on both TFs → LONG
     const signals = [];
 
-    // ── TradingView webhook signals (highest priority — drain queue) ──
+    // ── TradingView webhook signals DISABLED ──
+    // TV webhooks bypassed the 4-step SMC rule and fired wrong trades.
+    // All signals now flow exclusively through SMCPatternAgent.
     if (_tvSignalQueue.size > 0) {
-      for (const [sym, sig] of _tvSignalQueue) {
-        signals.push(sig);
-        bLog.scan(`TV-Webhook: ${sym} ${sig.direction} @ ${sig.price} (zone=${sig.zone} pivot=${sig.pivot})`);
-      }
-      _tvSignalQueue.clear();
+      bLog.scan(`TV-Webhook: ${_tvSignalQueue.size} queued signal(s) DISCARDED — SMCPatternAgent is sole source`);
+      _tvSignalQueue.clear(); // drain without executing
     }
 
     // ── Internal strategy scans DISABLED ──

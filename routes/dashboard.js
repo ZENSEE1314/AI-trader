@@ -174,6 +174,28 @@ router.put('/bitunix-referral-link', async (req, res) => {
   }
 });
 
+// Background pull throttle — one full sync per 5 min so page flips don't spam the exchange
+const _bgPullLastRun = new Map();
+const BG_PULL_COOLDOWN_MS = 5 * 60_000;
+
+function _triggerBackgroundPull(userId) {
+  const last = _bgPullLastRun.get(userId) || 0;
+  if (Date.now() - last < BG_PULL_COOLDOWN_MS) return;
+  _bgPullLastRun.set(userId, Date.now());
+
+  // Fire-and-forget — delegates to AccountantAgent which handles all cases:
+  // inserts missing positions, closes stale OPEN trades, fixes PnL/fees
+  setImmediate(async () => {
+    try {
+      const { AccountantAgent } = require('../agents/accountant-agent');
+      const agent = new AccountantAgent();
+      await agent.syncBitunixHistory();
+    } catch (err) {
+      console.warn(`[bg-pull] user ${userId} sync error: ${err.message}`);
+    }
+  });
+}
+
 // Trade history
 router.get('/trades', async (req, res) => {
   try {
@@ -199,6 +221,9 @@ router.get('/trades', async (req, res) => {
       [req.userId]
     );
     res.json({ trades: rows, total: parseInt(countRes[0].cnt), page, pages: Math.ceil(countRes[0].cnt / limit) });
+
+    // Background: keep trade data fresh without blocking the response
+    _triggerBackgroundPull(req.userId);
   } catch (err) {
     console.error('Trades error:', err.message);
     res.status(500).json({ error: 'Server error' });
