@@ -2369,12 +2369,14 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     return null;
   }
 
-  // ── STEP 3: 1m pivot freshness from NOW (≤ 10 min) ──────────────────
-  // If the 1m entry pivot is >10 bars old, the entry window already passed —
-  // price has moved away from the LH/HL level. Skip and wait for a fresh 1m pivot.
+  // ── STEP 3: 1m pivot freshness from NOW (≤ 30 min) ──────────────────
+  // 15m structure + 1m pivot must align. After the 15m pivot confirms it
+  // can take 10-25 min for the 1m swing to fully print (2L/2R pivot needs
+  // 2 bars each side = 4 min minimum lag). 10-bar limit was too tight and
+  // killed most valid setups. 30 bars = 30 min gives the entry window room.
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
-  if (bars1mNowAge > 10) {
-    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 10) — entry missed, reset`);
+  if (bars1mNowAge > 30) {
+    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 30) — entry missed, reset`);
     return null;
   }
   L(`Step3 PASS ✓ — 1m pivot is ${bars1mNowAge} bars old`);
