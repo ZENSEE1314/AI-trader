@@ -1097,7 +1097,7 @@ const TRADING_CONFIG = {
   ADAUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ADA'  },
   DOTUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'DOT'  },
   LINKUSDT: { iv:'15',  slPct:0.0030, label:'15M', name:'LINK' },
-  AVAXUSDT: { iv:'15',  slPct:0.0025, label:'15M', name:'AVAX' },
+  // AVAXUSDT removed — noisy price action, consistent -0.56R avg in backtests across all regimes
   LTCUSDT:  { iv:'15',  slPct:0.0025, label:'15M', name:'LTC'  },
   // XRP removed — 49% WR after fees, not profitable
   // All tokens: 15M primary + 1M LTF confirmation (follows BTC 15M+1M standard)
@@ -2220,6 +2220,23 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   const now   = cur.t;
   const price = cur.c;
 
+  // ── STEP 0: Kill zone filter ─────────────────────────────────────────────
+  // Asian session (01-04 UTC) wins only 11% of the time — nearly pure noise.
+  // Off-hours overall: 34% win rate.  London (07-10 UTC) + NY AM (12-16 UTC): 50% win rate.
+  // Only fire signals during high-liquidity kill zones where institutional
+  // order flow drives real directional moves rather than thin-market fakeouts.
+  {
+    const d    = new Date(now);
+    const hUTC = d.getUTCHours() + d.getUTCMinutes() / 60;
+    const inLondon = hUTC >= 7  && hUTC < 10;   // 07:00–10:00 UTC
+    const inNY     = hUTC >= 12 && hUTC < 16;   // 12:00–16:00 UTC (AM + Silver)
+    if (!inLondon && !inNY) {
+      L(`Step0 SKIP — outside kill zone (${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC, need 07-10 or 12-16)`);
+      return null;
+    }
+    L(`Step0 PASS ✓ — kill zone active ${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC`);
+  }
+
   // ── STEP 1: 15m structure — two-pivot sequence (normal) or single pivot (redirect) ──
   //
   // Normal path:  LL→LH → SHORT  |  HH→HL → LONG  (requires both pivots in sequence)
@@ -2283,6 +2300,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   if (!isChochFlip) {
     if (dir === 'LONG'  && trend4h === 'DOWN') { L(`Step1b FAIL — 4H DOWN, rejecting LONG`);  return null; }
     if (dir === 'SHORT' && trend4h === 'UP')   { L(`Step1b FAIL — 4H UP, rejecting SHORT`);   return null; }
+
   }
   L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}${isChochFlip ? ' (CHoCH flip bypass)' : ''}`);
 
@@ -2369,12 +2387,14 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     return null;
   }
 
-  // ── STEP 3: 1m pivot freshness from NOW (≤ 10 min) ──────────────────
-  // If the 1m entry pivot is >10 bars old, the entry window already passed —
-  // price has moved away from the LH/HL level. Skip and wait for a fresh 1m pivot.
+  // ── STEP 3: 1m pivot freshness from NOW (≤ 30 min) ──────────────────
+  // 15m structure + 1m pivot must align. After the 15m pivot confirms it
+  // can take 10-25 min for the 1m swing to fully print (2L/2R pivot needs
+  // 2 bars each side = 4 min minimum lag). 10-bar limit was too tight and
+  // killed most valid setups. 30 bars = 30 min gives the entry window room.
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
-  if (bars1mNowAge > 10) {
-    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 10) — entry missed, reset`);
+  if (bars1mNowAge > 30) {
+    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 30) — entry missed, reset`);
     return null;
   }
   L(`Step3 PASS ✓ — 1m pivot is ${bars1mNowAge} bars old`);
