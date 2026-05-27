@@ -1084,39 +1084,30 @@ async function analyzeSMC(symbol, log = console.log) {
 // says the opposite, we block X and wait for the opposite 15m structure to confirm.
 // Key: symbol  Value: { redirectDir, blockedDir, blockedAt, expiresAt }
 const _chochRedirectMap = new Map();
-const _bounceWatchMap = new Map();
 
 // ── Token trading config ─────────────────────────────────────────
 // iv = entry timeframe interval (Bybit format)
 // slPct = stop-loss % from pattern level (optimized per token)
 // label = human-readable TF label
-// Optimal config from 30-day param sweep (150 combos × 2 symbols):
-// 20× leverage (SL=0.025%) outperformed 75× (SL=0.007%) — wider SL avoids whipsaw stops.
-// TP placement: sweep showed 1:1 RR wins on synthetic data; use 1:1 for TP2, tight TP1 to lock partials.
-// ── Optimal config from 30-day MTF backtest (15m structure + 1m confirmation, no DCA) ──
-// Score metric: netPnl − 2×maxDD.  Combined result: +$462.28 on $1 000 (+46.2%) in 30 days.
-// SL formula: slPct = SL_margin_pct / leverage
-//
-//   BTC 125×  SL=45% of margin → slPct = 0.45/125 = 0.0036  (81.0% WR, +$93.33,  DD=−6.3%)
-//   ETH  50×  SL=50% of margin → slPct = 0.50/50  = 0.0100  (75.0% WR, +$146.80, DD=−10.3%)
-//   SOL  50×  SL=50% of margin → slPct = 0.50/50  = 0.0100  (72.4% WR, +$178.40, DD=−7.3%)
-//   BNB  75×  SL=40% of margin → slPct = 0.40/75  = 0.00533 (68.0% WR, +$43.75,  DD=−8.6%)
 const TRADING_CONFIG = {
-  BTCUSDT:  { iv:'15',  slPct:0.45 / 125, label:'15M', name:'BTC', leverage:125 },  // 125× — tight SL, very high WR
-  ETHUSDT:  { iv:'15',  slPct:0.50 /  50, label:'15M', name:'ETH', leverage: 50 },  //  50× — wide SL for ETH volatility
-  SOLUSDT:  { iv:'15',  slPct:0.50 /  50, label:'15M', name:'SOL', leverage: 50 },  //  50× — high vol alt
-  BNBUSDT:  { iv:'15',  slPct:0.40 /  75, label:'15M', name:'BNB', leverage: 75 },  //  75× — mid vol alt, narrower SL
+  BTCUSDT:  { iv:'15',  slPct:0.0025, label:'15M', name:'BTC'  },
+  ETHUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ETH'  },
+  SOLUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'SOL'  },
+  BNBUSDT:  { iv:'15',  slPct:0.0030, label:'15M', name:'BNB'  },
+  ADAUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ADA'  },
+  DOTUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'DOT'  },
+  LINKUSDT: { iv:'15',  slPct:0.0030, label:'15M', name:'LINK' },
+  AVAXUSDT: { iv:'15',  slPct:0.0025, label:'15M', name:'AVAX' },
+  LTCUSDT:  { iv:'15',  slPct:0.0025, label:'15M', name:'LTC'  },
+  // XRP removed — 49% WR after fees, not profitable
+  // All tokens: 15M primary + 1M LTF confirmation (follows BTC 15M+1M standard)
 };
 
-// ── TP / lock constants — SL-relative multipliers (same for all tokens) ─────
-// TP1 = 1:1 R:R (close 50% at breakeven, slide SL to entry)
-// TP2 = 2:1 R:R (close rest at 2× the SL distance)
-// These are MULTIPLIERS of slPct — applied per-token so BTC/ETH both get true 2:1
-// e.g. BTC slPct=0.00667 → TP1=0.00667, TP2=0.01333 from entry
-const TP1_MULT  = 1.0;   // 1:1 R:R — close 50% here, slide SL up to TP1 price
-const TP2_MULT  = 2.0;   // 2:1 R:R — close remaining 50% here
-const LOCK_MULT = 1.0;   // kept for legacy callers — SL lock level = TP1 price
-const PAT_TOL   = 0.005;   // 0.2% proximity to pattern level — tight so bot enters AT the LH/HL, not after price already moved away
+// ── TP / lock constants (same for all tokens) ────────────────────
+const TP1_PCT   = 0.005;   // 0.5%  — close 50% of position at TP1
+const TP2_PCT   = 0.010;   // 1.0%  — close remaining 50% at TP2
+const LOCK_PCT  = 0.0025;  // +0.25% — slide SL to lock after TP1 hit
+const PAT_TOL   = 0.002;   // 0.2% proximity to pattern level — tight so bot enters AT the LH/HL, not after price already moved away
 const PAT_WINGS = 2;       // bars each side to confirm pivot — was 3 (45min lag), 2 = 30min on 15m
 const PAT_LKBK  = 60;     // bars lookback for pivot detection
 const PAT_CD    = 45 * 60_000;  // 45-min cooldown — was 2H, shortened so HL#1 + HL#2 both fire
@@ -1125,63 +1116,6 @@ const PAT_CD    = 45 * 60_000;  // 45-min cooldown — was 2H, shortened so HL#1
 const TREND_EMA_S = 20;
 const TREND_EMA_M = 50;
 const TREND_EMA_L = 200;
-
-// ── RSI calculator (Wilder smoothing, returns last-bar value) ────────────────
-// Returns RSI in [0, 100], or null if bars is too short.
-function calcRSI(bars, period = 14) {
-  if (bars.length < period + 1) return null;
-  let avgGain = 0, avgLoss = 0;
-  for (let i = 1; i <= period; i++) {
-    const d = bars[i].c - bars[i - 1].c;
-    avgGain += d > 0 ? d : 0;
-    avgLoss += d < 0 ? -d : 0;
-  }
-  avgGain /= period;
-  avgLoss /= period;
-  for (let i = period + 1; i < bars.length; i++) {
-    const d = bars[i].c - bars[i - 1].c;
-    avgGain = (avgGain * (period - 1) + (d > 0 ? d : 0)) / period;
-    avgLoss = (avgLoss * (period - 1) + (d < 0 ? -d : 0)) / period;
-  }
-  if (avgLoss === 0) return 100;
-  return 100 - 100 / (1 + avgGain / avgLoss);
-}
-
-// ── ADX calculator (Wilder smoothing) ────────────────────────────────────────
-// Returns ADX in [0, 100] on the last bar, or null if bars is too short.
-// ADX < 18 = choppy/ranging market; ADX > 25 = clear trend.
-function calcADX(bars, period = 14) {
-  if (bars.length < period * 2 + 1) return null;
-  const trs = [], pdm = [], ndm = [];
-  for (let i = 1; i < bars.length; i++) {
-    const h = bars[i].h, l = bars[i].l, pc = bars[i - 1].c;
-    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
-    const up = h - bars[i - 1].h, dn = bars[i - 1].l - l;
-    pdm.push(up > dn && up > 0 ? up : 0);
-    ndm.push(dn > up && dn > 0 ? dn : 0);
-  }
-  // Wilder initial seed = sum of first `period` values
-  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0);
-  let sp  = pdm.slice(0, period).reduce((a, b) => a + b, 0);
-  let sn  = ndm.slice(0, period).reduce((a, b) => a + b, 0);
-  const dxVals = [];
-  for (let i = period; i < trs.length; i++) {
-    atr = atr - atr / period + trs[i];
-    sp  = sp  - sp  / period + pdm[i];
-    sn  = sn  - sn  / period + ndm[i];
-    const pdi = atr ? sp / atr * 100 : 0;
-    const ndi = atr ? sn / atr * 100 : 0;
-    const s   = pdi + ndi;
-    dxVals.push(s ? Math.abs(pdi - ndi) / s * 100 : 0);
-  }
-  if (dxVals.length < period) return null;
-  // Wilder smooth DX → ADX
-  let adx = dxVals.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  for (let i = period; i < dxVals.length; i++) {
-    adx = (adx * (period - 1) + dxVals[i]) / period;
-  }
-  return adx;
-}
 
 // ── EMA calculator ────────────────────────────────────────────────
 function calcEMASeries(bars, period) {
@@ -1479,21 +1413,14 @@ function detectHL(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
   // Entry price: LTF bar close for precision; fall back to 15m close
   const entryHL = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
-  // TP2 = previous swing HIGH in the window = the LH / liquidity pool above
-  // This is the real SMC "draw on liquidity" — price pulls back to HL then targets the LH above
-  const highs   = _pivHighs(window);
-  const nearLH  = highs.length > 0 ? Math.max(...highs.map(h => h.price)) : null;
-  const tp2Price = nearLH && nearLH > entryHL ? nearLH : entryHL * (1 + slPct * TP2_MULT);
-  const tp1Price = entryHL + (tp2Price - entryHL) * 0.5; // TP1 = midpoint to TP2
-
   return {
     pattern:  'HL',
     dir:      'LONG',
     level:    curr.price,
     slPrice:  curr.price * (1 - slPct),
-    tp1:      tp1Price,
-    tp2:      tp2Price,
-    lockAt:   tp1Price,  // slide SL to entry when TP1 hit
+    tp1:      entryHL * (1 + TP1_PCT),
+    tp2:      entryHL * (1 + TP2_PCT),
+    lockAt:   entryHL * (1 + LOCK_PCT),
   };
 }
 
@@ -1528,20 +1455,14 @@ function detectLL(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
 
   const entryLL = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
-  // TP2 = previous swing HIGH (LH above) — draw on liquidity target
-  const highsLL  = _pivHighs(window);
-  const nearLHll = highsLL.length > 0 ? Math.max(...highsLL.map(h => h.price)) : null;
-  const tp2LL    = nearLHll && nearLHll > entryLL ? nearLHll : entryLL * (1 + slPct * TP2_MULT);
-  const tp1LL    = entryLL + (tp2LL - entryLL) * 0.5;
-
   return {
     pattern:  'LL',
     dir:      'LONG',
     level:    curr.price,
     slPrice:  curr.price * (1 - slPct),
-    tp1:      tp1LL,
-    tp2:      tp2LL,
-    lockAt:   tp1LL,
+    tp1:      entryLL * (1 + TP1_PCT),
+    tp2:      entryLL * (1 + TP2_PCT),
+    lockAt:   entryLL * (1 + LOCK_PCT),
   };
 }
 
@@ -1607,20 +1528,14 @@ function detectLH(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
 
   const entryLH = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
-  // TP2 = previous swing LOW (HL below) — draw on liquidity target for SHORT
-  const lowsLH  = _pivLows(window);
-  const nearHL  = lowsLH.length > 0 ? Math.min(...lowsLH.map(l => l.price)) : null;
-  const tp2LH   = nearHL && nearHL < entryLH ? nearHL : entryLH * (1 - slPct * TP2_MULT);
-  const tp1LH   = entryLH - (entryLH - tp2LH) * 0.5;  // midpoint
-
   return {
     pattern:  'LH',
     dir:      'SHORT',
     level:    curr.price,
     slPrice:  curr.price * (1 + slPct),
-    tp1:      tp1LH,
-    tp2:      tp2LH,
-    lockAt:   tp1LH,
+    tp1:      entryLH * (1 - TP1_PCT),
+    tp2:      entryLH * (1 - TP2_PCT),
+    lockAt:   entryLH * (1 - LOCK_PCT),
   };
 }
 
@@ -1670,20 +1585,14 @@ function detectHH(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
 
   const entryHH = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
-  // TP2 = previous swing LOW — draw on liquidity target for HH SHORT
-  const lowsHH  = _pivLows(window);
-  const nearHLhh = lowsHH.length > 0 ? Math.min(...lowsHH.map(l => l.price)) : null;
-  const tp2HH   = nearHLhh && nearHLhh < entryHH ? nearHLhh : entryHH * (1 - slPct * TP2_MULT);
-  const tp1HH   = entryHH - (entryHH - tp2HH) * 0.5;
-
   return {
     pattern:  'HH',
     dir:      'SHORT',
     level:    curr.price,
     slPrice:  curr.price * (1 + slPct),
-    tp1:      tp1HH,
-    tp2:      tp2HH,
-    lockAt:   tp1HH,
+    tp1:      entryHH * (1 - TP1_PCT),
+    tp2:      entryHH * (1 - TP2_PCT),
+    lockAt:   entryHH * (1 - LOCK_PCT),
   };
 }
 
@@ -1787,8 +1696,8 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
       tp2:      sig.tp2,
       lockAt:   sig.lockAt,
       slPct:    (cfg.slPct * 100).toFixed(2) + '%',
-      tp1Pct:   (cfg.slPct * TP1_MULT * 100).toFixed(2) + '%',
-      tp2Pct:   (cfg.slPct * TP2_MULT * 100).toFixed(2) + '%',
+      tp1Pct:   (TP1_PCT  * 100).toFixed(2) + '%',
+      tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
       trend,
       fib50,
       fib618:   fibZones?.p618 ?? null,  // OTE premium line — SHORT only above this
@@ -1819,7 +1728,7 @@ function checkTradeState(trade, bar) {
     if (tp1Hit) {
       state.tp1Hit    = true;
       state.tp1HitTs  = bar.t;
-      state.sl        = state.tp1;   // slide SL to TP1 — locked-in profit if TP2 fails
+      state.sl        = state.lockAt; // slide SL to lock level
     }
     // Check SL before TP1
     const slHit = dir === 'LONG' ? l <= state.sl : h >= state.sl;
@@ -1942,7 +1851,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
       const prevL = lows[lows.length - 2];
       if (lastL.price > prevL.price && lastL.idx > curr.idx) return null;
     }
-    return { pattern:'LH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-s*TP1_MULT), tp2:c.c*(1-s*TP2_MULT), lockAt:c.c*(1-s*LOCK_MULT) };
+    return { pattern:'LH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-TP1_PCT), tp2:c.c*(1-TP2_PCT), lockAt:c.c*(1-LOCK_PCT) };
   }
   function _1mHL(w, c, s) {
     const lows = _ind1mLows(w);
@@ -1954,7 +1863,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     const dist = Math.abs(c.c - curr.price) / curr.price;
     if (dist > PAT_TOL) return null;
     if (!c.bullish) return null; // entry bar must be rising
-    return { pattern:'HL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+s*TP1_MULT), tp2:c.c*(1+s*TP2_MULT), lockAt:c.c*(1+s*LOCK_MULT) };
+    return { pattern:'HL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+TP1_PCT), tp2:c.c*(1+TP2_PCT), lockAt:c.c*(1+LOCK_PCT) };
   }
   function _1mHH(w, c, s) {
     const highs = _ind1mHighs(w);
@@ -1973,7 +1882,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
       const prevL = lows[lows.length - 2];
       if (lastL.price > prevL.price && lastL.idx > curr.idx) return null;
     }
-    return { pattern:'HH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-s*TP1_MULT), tp2:c.c*(1-s*TP2_MULT), lockAt:c.c*(1-s*LOCK_MULT) };
+    return { pattern:'HH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-TP1_PCT), tp2:c.c*(1-TP2_PCT), lockAt:c.c*(1-LOCK_PCT) };
   }
   function _1mLL(w, c, s) {
     const lows = _ind1mLows(w);
@@ -1985,7 +1894,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     const dist = Math.abs(c.c - curr.price) / curr.price;
     if (dist > PAT_TOL) return null;
     if (!c.bullish) return null;
-    return { pattern:'LL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+s*TP1_MULT), tp2:c.c*(1+s*TP2_MULT), lockAt:c.c*(1+s*LOCK_MULT) };
+    return { pattern:'LL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+TP1_PCT), tp2:c.c*(1+TP2_PCT), lockAt:c.c*(1+LOCK_PCT) };
   }
 
   // ── Current structure gate: most recent confirmed pivot decides direction ──
@@ -2061,8 +1970,8 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
       tp2:     sig.tp2,
       lockAt:  sig.lockAt,
       slPct:   (cfg.slPct * 100).toFixed(2) + '%',
-      tp1Pct:  (cfg.slPct * TP1_MULT * 100).toFixed(2) + '%',
-      tp2Pct:  (cfg.slPct * TP2_MULT * 100).toFixed(2) + '%',
+      tp1Pct:  (TP1_PCT  * 100).toFixed(2) + '%',
+      tp2Pct:  (TP2_PCT  * 100).toFixed(2) + '%',
       trend,
       fib50,
       ltfUsed: '1m-primary',
@@ -2101,11 +2010,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 const STRUCT_BARS_15M  = 60;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 15 h old
 const PIVOT_FRESH_BARS = 16;        // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤16 bars = 4 h old
 const WINDOW_MS        = 2 * 60 * 60_000; // 1m pivot must form within 2 h of the 15m pivot bar open
-const ENTRY_TOL        = 0.005;     // MUST equal slPct — entry must be within slPct% of the 1m HL/LH.
-const BOUNCE_WATCH_ENABLED = process.env.BOUNCE_WATCH_ENABLED !== '0';
-const BOUNCE_WATCH_EXPIRE_MS = (parseInt(process.env.BOUNCE_WATCH_EXPIRE_MIN || '90', 10) || 90) * 60_000;
-const BOUNCE_WATCH_MAX_LH_AGE = parseInt(process.env.BOUNCE_WATCH_MAX_LH_AGE || '10', 10);
-const BOUNCE_WATCH_MIN_RETRACE = parseFloat(process.env.BOUNCE_WATCH_MIN_RETRACE || '0.45');
+const ENTRY_TOL        = 0.002;     // MUST equal slPct — entry must be within slPct% of the 1m HL/LH.
                                     // If ENTRY_TOL > slPct the SL would float above the structural HL when
                                     // entering at max drift, blowing out capital by 2× slPct × leverage.
 
@@ -2156,111 +2061,17 @@ function _toPivotsForCHoCH(bars) {
   return out.sort((a, b) => a.idx - b.idx);
 }
 
-function _updateBullishBounceWatch(sym, bars1m, ph1, pl1, now, dbg = null) {
-  const D = (msg) => dbg && dbg(msg);
-  if (!BOUNCE_WATCH_ENABLED || ph1.length < 2 || pl1.length < 2 || !bars1m?.length) return null;
-
-  let lastLow = null;
-  let prevLow = null;
-  for (let i = pl1.length - 1; i >= 1; i--) {
-    if (pl1[i].price < pl1[i - 1].price) {
-      lastLow = pl1[i];
-      prevLow = pl1[i - 1];
-      break;
-    }
-  }
-  if (!lastLow || !prevLow) return _bounceWatchMap.get(sym) || null;
-
-  let brokenHigh = null;
-  let chochBar = null;
-
-  // TradingView's CHoCH after a LL is usually the close through the small bounce
-  // high formed after the LL. Fall back to the prior high only when that local
-  // post-LL high has not printed yet.
-  const highsAfterLL = ph1.filter(p => p.barTs > lastLow.barTs);
-  for (const h of highsAfterLL) {
-    const breaker = bars1m.find(b => b.t > h.barTs && b.c > h.price);
-    if (breaker) {
-      brokenHigh = h;
-      chochBar = breaker;
-      break;
-    }
-  }
-
-  if (!brokenHigh) {
-    const highsBeforeLL = ph1.filter(p => p.barTs < lastLow.barTs);
-    brokenHigh = highsBeforeLL[highsBeforeLL.length - 1];
-    if (!brokenHigh) return _bounceWatchMap.get(sym) || null;
-    chochBar = bars1m.find(b => b.t > lastLow.barTs && b.c > brokenHigh.price);
-  }
-  if (!chochBar) return _bounceWatchMap.get(sym) || null;
-
-  const existing = _bounceWatchMap.get(sym);
-  if (!existing || existing.llTs !== lastLow.barTs || existing.chochTs !== chochBar.t) {
-    const watch = {
-      llPrice: lastLow.price,
-      llTs: lastLow.barTs,
-      brokenHigh: brokenHigh.price,
-      chochTs: chochBar.t,
-      expiresAt: now + BOUNCE_WATCH_EXPIRE_MS,
-    };
-    _bounceWatchMap.set(sym, watch);
-    D(`BounceWatch ON - 1m LL ${lastLow.price.toFixed(2)} then bullish CHoCH above ${brokenHigh.price.toFixed(2)}; waiting for LH/rejection short`);
-    return watch;
-  }
-
-  return existing;
-}
-
-function _bounceWatchShortSetup(sym, bars1m, ph1, now, dbg = null) {
-  const D = (msg) => dbg && dbg(msg);
-  if (!BOUNCE_WATCH_ENABLED) return null;
-  const watch = _bounceWatchMap.get(sym);
-  if (!watch) return null;
-  if (now > watch.expiresAt) {
-    _bounceWatchMap.delete(sym);
-    D('BounceWatch expired - no LH rejection after bullish CHoCH bounce');
-    return null;
-  }
-
-  const highsAfterChoch = ph1.filter(p => p.barTs > watch.chochTs);
-  if (highsAfterChoch.length < 1 || ph1.length < 2) return null;
-
-  const pivot = highsAfterChoch[highsAfterChoch.length - 1];
-  const prevHigh = ph1.filter(p => p.barTs < pivot.barTs).slice(-1)[0];
-  if (!prevHigh || pivot.price >= prevHigh.price) return null;
-
-  const barsSincePivot = bars1m.length - 1 - pivot.idx;
-  if (barsSincePivot > BOUNCE_WATCH_MAX_LH_AGE) return null;
-
-  const bounceRange = Math.max(1e-9, pivot.price - watch.llPrice);
-  const retrace = (pivot.price - watch.brokenHigh) / bounceRange;
-  if (retrace < BOUNCE_WATCH_MIN_RETRACE) {
-    D(`BounceWatch wait - LH ${pivot.price.toFixed(2)} retrace ${retrace.toFixed(2)} < ${BOUNCE_WATCH_MIN_RETRACE}`);
-    return null;
-  }
-
-  const cur = bars1m[bars1m.length - 1];
-  const rejected = cur.c < pivot.price && cur.h <= pivot.price * (1 + ENTRY_TOL);
-  if (!rejected) {
-    D(`BounceWatch wait - price has not rejected LH ${pivot.price.toFixed(2)}`);
-    return null;
-  }
-
-  return { pivot, watch, label: 'LL->LH_BOUNCE', reason: `1m LL+CHoCH bounce rejected at LH ${pivot.price.toFixed(2)}` };
-}
-
 // ── _detect15mStructure ───────────────────────────────────────────────
 // Detects a complete 2-pivot trend structure on the 15m chart:
 //
-//   SHORT: LL → LH   (downtrend continuation)
-//   SHORT: HL → LH   (CHoCH — uptrend turning bearish)
+//   SHORT: LL → LH   (saw a Lower Low, then price bounced to a Lower High)
+//     Wait for LL first. When LH confirms → SHORT setup ready.
 //
-//   LONG:  HH → HL   (uptrend continuation)
-//   LONG:  LH → HL   (CHoCH — downtrend turning bullish)
+//   LONG:  HH → HL   (saw a Higher High, then price pulled back to a Higher Low)
+//     Wait for HH first. When HL confirms → LONG setup ready.
 //
 // Both pivots must be within STRUCT_BARS_15M bars (3 h) — no stale setups.
-// Sideways market → returns null → no trade.
+// Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
 // minBouncePct: pass 0 — 2L/2R pivot detection on 15m candles is the sole judge.
 // The lowest candle in a 60-min window IS the HL; no artificial % filter on top.
 function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, dbg = null) {
@@ -2269,70 +2080,127 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, d
   if (!bars15m || bars15m.length < 6) return null;
 
   const bars15mLen = bars15m.length;
+  const EXTREME_TOL = 0.002;
 
-  // Use the last 2 adjacent pivot highs and lows — this is how the TradingView SMC
-  // indicator determines HH/LH/HL/LL. It correctly captures the CURRENT trend's
-  // HH (not the global max from 50h ago) and the CURRENT LL (not a stale global min).
-  const lastH = ph15[ph15.length - 1];  // most recent confirmed 15m pivot HIGH
-  const prevH = ph15[ph15.length - 2];  // previous confirmed 15m pivot HIGH
-  const lastL = pl15[pl15.length - 1];  // most recent confirmed 15m pivot LOW
-  const prevL = pl15[pl15.length - 2];  // previous confirmed 15m pivot LOW
+  // ── SHORT: LL → LH ───────────────────────────────────────────────
+  // LL = most recent pivot low that is LOWER than the previous pivot low (relative, like TradingView)
+  // NOT the global absolute minimum — that can be 100+ bars old.
+  let llPivot = null;
+  for (let i = pl15.length - 1; i >= 1; i--) {
+    const age = (bars15mLen - 1) - pl15[i].idx;
+    if (age > STRUCT_BARS_15M) break;
+    if (pl15[i].price < pl15[i - 1].price) { llPivot = pl15[i]; break; }
+  }
 
-  const lastHAge = (bars15mLen - 1) - lastH.idx;
-  const lastLAge = (bars15mLen - 1) - lastL.idx;
+  if (!llPivot) {
+    D(`SHORT skip: no recent LL (all lows are HL within last ${STRUCT_BARS_15M} bars)`);
+  } else {
+    const llAge = (bars15mLen - 1) - llPivot.idx;
+    const phAfterLL = ph15.filter(p => p.barTs > llPivot.barTs);
 
-  const isLH = lastH.price < prevH.price;  // most recent high is lower (bearish)
-  const isHL = lastL.price > prevL.price;  // most recent low is higher (bullish)
-  const isLL = lastL.price < prevL.price;  // most recent low is lower (bearish)
-  const isHH = lastH.price > prevH.price;  // most recent high is higher (bullish)
+    // Find most recent confirmed relative LH (lower than its predecessor).
+    // If no relative LH yet, fall back to the single pivot after LL.
+    let lhPivot = null;
+    for (let i = phAfterLL.length - 1; i >= 1; i--) {
+      if (phAfterLL[i].price < phAfterLL[i - 1].price) {
+        lhPivot = phAfterLL[i];
+        break;
+      }
+    }
+    if (!lhPivot && phAfterLL.length === 1) {
+      lhPivot = phAfterLL[0];
+    }
 
-  // ── SHORT: LH is most recent pivot ──────────────────────────────────
-  if (isLH && lastH.barTs > lastL.barTs) {
-    const lhAge = lastHAge;
-    const prevLAge = lastLAge;
-
-    if (lhAge <= PIVOT_FRESH_BARS && prevLAge <= STRUCT_BARS_15M) {
-      const bouncePct = (lastH.price - lastL.price) / lastL.price;
-      if (bouncePct >= slPct * 2) {
-        if (isLL) {
-          // CHoCH guard: bounce from LL to LH broke prior pivot high → ambiguous → skip
-          const highsBeforeLL = ph15.filter(p => p.barTs < lastL.barTs);
-          const prevHHprice   = highsBeforeLL.length > 0
-            ? Math.max(...highsBeforeLL.map(p => p.price))
-            : prevH.price;
-          const barsInBounce  = bars15m.filter(b => b.t > lastL.barTs && b.t < lastH.barTs);
-          const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
-          if (!chochHappened) {
-            return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
-          }
-        } else if (isHL) {
-          // HL → LH: uptrend turning bearish (CHoCH short)
-          return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'HL→LH' };
+    if (!lhPivot) {
+      if (phAfterLL.length >= 2) {
+        D(`SHORT skip: all ${phAfterLL.length} pivot highs after LL are HHs — uptrend, wait for LH`);
+      } else {
+        D(`SHORT skip: no pivot high after LL@${llPivot.price.toFixed(2)} (llAge=${llAge})`);
+      }
+    } else {
+      const lhAge = (bars15mLen - 1) - lhPivot.idx;
+      // Structure check: did any bar close ABOVE lhPivot after it formed?
+      const barsAfterLH = bars15m.filter(b => b.t > lhPivot.barTs);
+      const lhBrokenUp = barsAfterLH.some(b => b.c > lhPivot.price * (1 + EXTREME_TOL));
+      if (lhBrokenUp) {
+        // LH broken upward — setup invalidated. CHoCH may be fake; wait for new structure.
+        D(`SHORT skip: LH@${lhPivot.price.toFixed(2)} broken upward — setup invalidated, wait for new LH`);
+      } else {
+        // LH intact — SHORT entry at the LH.
+        const bouncePct = (lhPivot.price - llPivot.price) / llPivot.price;
+        if (bouncePct < slPct * 2) {
+          D(`SHORT skip: bounce too small ${(bouncePct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
+        } else if (lhAge > PIVOT_FRESH_BARS) {
+          D(`SHORT skip: LH age=${lhAge} > PIVOT_FRESH_BARS=${PIVOT_FRESH_BARS}`);
+        } else {
+          return { dir: 'SHORT', pivot15: lhPivot, preceding: llPivot, label: 'LL→LH' };
         }
       }
     }
   }
 
-  // ── LONG: HL is most recent pivot ───────────────────────────────────
-  if (isHL && lastL.barTs > lastH.barTs) {
-    const hlAge = lastLAge;
-    const prevHAge = lastHAge;
-
-    if (hlAge <= PIVOT_FRESH_BARS && prevHAge <= STRUCT_BARS_15M) {
-      const pullbackPct = (lastH.price - lastL.price) / lastH.price;
-      if (pullbackPct >= slPct * 2) {
-        if (isHH) {
-          // HH → HL: uptrend continuation
-          return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
-        } else if (isLH) {
-          // LH → HL: downtrend turning bullish (CHoCH long)
-          return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'LH→HL' };
-        }
-      }
-    }
+  // ── LONG: HH → HL ────────────────────────────────────────────────
+  // HH = most recent pivot high that is HIGHER than the previous pivot high (relative, like TradingView)
+  // NOT the global absolute maximum — that can be 100+ bars old.
+  let hhPivot = null;
+  for (let i = ph15.length - 1; i >= 1; i--) {
+    const age = (bars15mLen - 1) - ph15[i].idx;
+    if (age > STRUCT_BARS_15M) break;
+    if (ph15[i].price > ph15[i - 1].price) { hhPivot = ph15[i]; break; }
   }
 
-  return null; // sideways / incomplete structure → no trade
+  if (!hhPivot) {
+    D(`LONG skip: no recent HH (all highs are LH within last ${STRUCT_BARS_15M} bars)`);
+    return null;
+  }
+
+  const hhAge = (bars15mLen - 1) - hhPivot.idx;
+  // prevHL = pivot low just before the HH (used to qualify HL)
+  const prevHL = pl15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
+
+  // HL = most recent pivot LOW after the HH that is HIGHER than the previous pivot low
+  const plAfterHH = pl15.filter(p => p.barTs > hhPivot.barTs);
+  let hlPivot = null;
+  for (let i = plAfterHH.length - 1; i >= 1; i--) {
+    if (plAfterHH[i].price > plAfterHH[i - 1].price) { hlPivot = plAfterHH[i]; break; }
+  }
+  // If no relative HL found, accept any pivot low after HH that is above prevHL
+  if (!hlPivot && plAfterHH.length > 0) {
+    hlPivot = plAfterHH[plAfterHH.length - 1];
+  }
+  // Must be above the pivot low that preceded the HH (genuine HL, not a lower low)
+  if (hlPivot && prevHL && hlPivot.price <= prevHL.price) {
+    D(`LONG skip: HL@${hlPivot.price.toFixed(2)} <= prevHL@${prevHL.price.toFixed(2)} (LL break)`);
+    return null;
+  }
+
+  if (!hlPivot) {
+    D(`LONG skip: no HL after HH@${hhPivot.price.toFixed(2)} (hhAge=${hhAge})`);
+    return null;
+  }
+
+  const hlAge = (bars15mLen - 1) - hlPivot.idx;
+
+  // Structure check: did any bar close BELOW hlPivot after it formed?
+  const barsAfterHL = bars15m.filter(b => b.t > hlPivot.barTs);
+  const hlBrokenDown = barsAfterHL.some(b => b.c < hlPivot.price * (1 - EXTREME_TOL));
+  if (hlBrokenDown) {
+    // HL broken downward — setup invalidated. CHoCH may be fake; wait for new structure.
+    D(`LONG skip: HL@${hlPivot.price.toFixed(2)} broken downward — setup invalidated, wait for new HL`);
+    return null;
+  }
+
+  const pullbackPct = (hhPivot.price - hlPivot.price) / hhPivot.price;
+
+  if (hlAge > PIVOT_FRESH_BARS) {
+    D(`LONG skip: HL age=${hlAge} > PIVOT_FRESH_BARS=${PIVOT_FRESH_BARS}`);
+  } else if (pullbackPct < slPct * 2) {
+    D(`LONG skip: pullback too small ${(pullbackPct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
+  } else {
+    return { dir: 'LONG', pivot15: hlPivot, preceding: hhPivot, label: 'HH→HL' };
+  }
+
+  return null;
 }
 
 // ── _detect15mPivot ───────────────────────────────────────────────────
@@ -2382,7 +2250,7 @@ function _detect15mPivot(ph15, pl15, bars15mLen) {
   return candidates[0];
 }
 
-async function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
+function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
   return scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log);
 }
 
@@ -2398,16 +2266,10 @@ async function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns, lo
 //   LONG:  find a 1m HL within WINDOW_MS of the 15m pivot bar.
 //   Outside that window → skip, wait for the next 15m candle.
 //
-// ── Test-only overrides (backtest parameter sweeps) ─────────────────────────
-// setTestOverrides({ adxMin: 12, extraSessions: [{start:15, end:17}] })
-// Call with null to reset to production defaults.
-let _testOverrides = null;
-function setTestOverrides(cfg) { _testOverrides = cfg || null; }
-
 // STEP 3 — Entry freshness:
 //   The 1m confirmation pivot must be within last 30 bars (30 min) from NOW.
 //   Prevents firing on a stale setup that matched hours ago.
-async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
+function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
   const L = (msg) => log && log(`[SMC-STEP] ${sym}: ${msg}`);
 
   const cfg = TRADING_CONFIG[sym];
@@ -2419,48 +2281,6 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
   const now   = cur.t;
   const price = cur.c;
 
-  // ── STEP 0: ICT Killzone gate ────────────────────────────────────────────
-  // All 4 institutional sessions — LH/HL pivots form across the full day:
-  //   Asian:    02:00–06:00 UTC  (Asia session momentum)
-  //   London:   07:00–10:00 UTC  (EU open, high liquidity)
-  //   NY AM:    12:00–15:00 UTC  (NY/London overlap, highest volume)
-  //   NY PM:    18:30–21:00 UTC  (NY close push, end-of-day momentum)
-  {
-    const d = new Date(now);
-    const h = d.getUTCHours() + d.getUTCMinutes() / 60;
-    const inAsian  = h >= 2    && h < 6;
-    const inLondon = h >= 7    && h < 10;
-    const inNYAM   = h >= 12   && h < 15;
-    const inNYPM   = h >= 18.5 && h < 21;
-    // Test override: allow extra sessions
-    const extraSessions = _testOverrides?.extraSessions || [];
-    const inExtra = extraSessions.some(s => h >= s.start && h < s.end);
-    if (!inAsian && !inLondon && !inNYAM && !inNYPM && !inExtra) {
-      L(`Step0 FAIL — outside killzone (${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC, need 02-06/07-10/12-15/18:30-21)`);
-      return null;
-    }
-    const sessionName = inAsian ? 'Asian' : inLondon ? 'London' : inNYAM ? 'NY AM' : inNYPM ? 'NY PM' : `Extra(${Math.floor(h)}h)`;
-    L(`Step0 PASS ✓ — ${sessionName} killzone ${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC`);
-  }
-
-  // ── STEP 0b: compute daily VWAP (used after Step1 to filter direction) ──
-  // VWAP resets at midnight UTC. Uses 15m bar volume (fallback=1 for synth data).
-  let _vwap = null;
-  {
-    const midnightUTC = now - (now % 86400000);
-    const todayBars   = bars15m.filter(b => b.t >= midnightUTC);
-    if (todayBars.length >= 3) {
-      let cumPV = 0, cumV = 0;
-      for (const b of todayBars) {
-        const tp  = (b.h + b.l + b.c) / 3;
-        const vol = b.v || 1;
-        cumPV += tp * vol;
-        cumV  += vol;
-      }
-      _vwap = cumPV / cumV;
-    }
-  }
-
   // ── STEP 1: 15m structure — two-pivot sequence (normal) or single pivot (redirect) ──
   //
   // Normal path:  LL→LH → SHORT  |  HH→HL → LONG  (requires both pivots in sequence)
@@ -2471,9 +2291,7 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
   //   If 1m CHoCH is BULLISH at that moment → SHORT blocked, redirect=LONG stored.
   //   Next scan sees HH or HL on 15m → redirect resolves → LONG entry (via 1m HL below).
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
-  const { ph: ph1, pl: pl1 } = _allPivots(bars1m);
   const total1m = bars1m.length;
-  _updateBullishBounceWatch(sym, bars1m, ph1, pl1, now, L);
 
   let dir, pivot15, label;
 
@@ -2496,18 +2314,9 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
         L(`Step1 REDIRECT ALLOW ✓ — ${single.label} on 15m resolves redirect to ${activeRedirect.redirectDir}`);
         ({ dir, pivot15, label } = single);
       } else {
-        const bounce = _bounceWatchShortSetup(sym, bars1m, ph1, now, L);
-        if (activeRedirect.redirectDir === 'LONG' && bounce) {
-          _chochRedirectMap.delete(sym);
-          dir = 'SHORT';
-          pivot15 = bounce.pivot;
-          label = bounce.label;
-          L(`Step1 BOUNCE-WATCH OVERRIDE ✓ — bullish CHoCH bounce failed into LH; ${bounce.reason}`);
-        } else {
-          const need = activeRedirect.redirectDir === 'SHORT' ? 'LH' : 'HL';
-          L(`Step1 REDIRECT BLOCK — waiting for 15m ${need} to ${activeRedirect.redirectDir}`);
-          return null;
-        }
+        const need = activeRedirect.redirectDir === 'SHORT' ? 'LH' : 'HL';
+        L(`Step1 REDIRECT BLOCK — waiting for 15m ${need} to ${activeRedirect.redirectDir}`);
+        return null;
       }
     }
   } else {
@@ -2518,154 +2327,48 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
       const lastL = pl15.length ? pl15[pl15.length - 1] : null;
       const hAge  = lastH ? (bars15m.length - 1) - lastH.idx : -1;
       const lAge  = lastL ? (bars15m.length - 1) - lastL.idx : -1;
-      const bounce = _bounceWatchShortSetup(sym, bars1m, ph1, now, L);
-      if (bounce) {
-        dir = 'SHORT';
-        pivot15 = bounce.pivot;
-        label = bounce.label;
-        L(`Step1 BOUNCE-WATCH PASS ✓ — ${bounce.reason}`);
-      } else {
-        L(`Step1 FAIL — no 15m structure. ph=${ph15.length}(age=${hAge}) pl=${pl15.length}(age=${lAge})`);
-        return null;
-      }
-    } else {
-      ({ dir, pivot15, label } = st);
+      L(`Step1 FAIL — no 15m structure. ph=${ph15.length}(age=${hAge}) pl=${pl15.length}(age=${lAge})`);
+      return null;
     }
+    ({ dir, pivot15, label } = st);
   }
 
   L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
 
-  // ── Step 1b: trend gate — 4H primary, 1H EMA50 for fast reversals ──────
-  // 4H EMA20/50/200 is the primary trend. BUT it is slow — after a CHoCH
-  // reversal the 4H takes hours to flip. So:
-  //   If 4H=DOWN but price > 1H EMA50 → trend reversing bullish → allow LONG
-  //   If 4H=UP   but price < 1H EMA50 → trend reversing bearish → allow SHORT
-  //   4H=NEUTRAL → use 1H EMA50 alone (above=LONG, below=SHORT)
-  //
-  // SMC structure override: if 15m pattern is HL (for LONG) or LH (for SHORT),
-  // the structure itself IS the trend signal — skip the EMA50 check.
-  // An HL by definition forms below EMA50; requiring price > EMA50 at the HL
-  // bottom kills the exact entries SMC is designed to catch.
-  const isChochFlip = false;
-  const isTrendStructure = false;
-
-  // Which patterns can bypass EMA50 + VWAP gates:
-  //
-  //   HH→HL LONG  ✅ bypass — uptrend continuation. HL always forms below EMA50/VWAP.
-  //   LH→HL LONG  ✅ bypass — CHoCH bullish reversal. HL in discount zone.
-  //   LL→LH SHORT ✅ bypass — downtrend continuation. LH always forms above EMA50/VWAP.
-  //
-  //   HL→LH SHORT ❌ NO bypass — CHoCH bearish. Price bounced from HL then made LH.
-  //                  In an uptrend (HH→HL→HH), HL→LH is just noise/pullback — NOT a short.
-  //                  Must pass EMA50 gate to confirm trend is genuinely reversing.
-  const isLongBypass  = dir === 'LONG'  && (label === 'HH→HL' || label === 'LH→HL');
-  const isShortBypass = dir === 'SHORT' && (label === 'LL→LH');  // HL→LH must prove downtrend via EMA50
-  const structureMatchesDir = isLongBypass || isShortBypass;
-
+  // ── Step 1b: 4H trend gate ───────────────────────────────────────────
   let trend4h = 'NEUTRAL';
   try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}
+  if (dir === 'LONG'  && trend4h === 'DOWN') { L(`Step1b FAIL — 4H DOWN, rejecting LONG`);  return null; }
+  if (dir === 'SHORT' && trend4h === 'UP')   { L(`Step1b FAIL — 4H UP, rejecting SHORT`);   return null; }
+  L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}`);
 
-  let trendEffective = trend4h;
-  let above1hEma = null;
+  // ── Step 1c: 1m CHoCH conflict → store redirect ──────────────────────
+  // Only the 1m CHoCH triggers a flip. 15m CHoCH is NOT checked here —
+  // 15m structure is already the signal source, so checking 15m CHoCH
+  // would double-filter the same timeframe.
+  // If 15m structure says SHORT but 1m CHoCH is BULLISH → block SHORT, redirect LONG.
+  // If 15m structure says LONG  but 1m CHoCH is BEARISH → block LONG,  redirect SHORT.
+  if (!_chochRedirectMap.has(sym)) {
+    const CHOCH_1M_RECENCY = 90 * 60_000; // 90 min
 
-  if (structureMatchesDir) {
-    // 15m structure already confirms direction — trust it.
-    // Still compute effective trend for logging/indicator snapshot but don't gate on it.
-    trendEffective = dir === 'LONG' ? 'UP' : 'DOWN';
-    L(`Step1b STRUCTURE OVERRIDE ✓ — 15m pattern "${label}" confirms ${dir}, skipping EMA50 gate`);
-  } else {
-    // No clear SMC structure match — use 1H EMA50 fast-flip as trend gate
-    try {
-      const bars1h = await fetchCandles(sym, '60', 60);
-      if (bars1h && bars1h.length >= 50) {
-        const ema1h = calcEMASeries(bars1h, 50);
-        const ema1hLast = ema1h[ema1h.length - 1];
-        if (ema1hLast !== null) {
-          above1hEma = price > ema1hLast;
-          if (trend4h === 'DOWN' && above1hEma)  trendEffective = 'UP';
-          if (trend4h === 'UP'   && !above1hEma) trendEffective = 'DOWN';
-          if (trend4h === 'NEUTRAL') trendEffective = above1hEma ? 'UP' : 'DOWN';
-          L(`Step1b 1H EMA50=${ema1hLast.toFixed(2)} price=${price.toFixed(2)} above=${above1hEma} → trend 4H=${trend4h} effective=${trendEffective}`);
-        }
-      }
-    } catch (_) {}
+    const choch1m = detectCHoCH(bars1m, _toPivotsForCHoCH(bars1m), 90);
 
-    if (trendEffective === 'UP'      && dir !== 'LONG')  { L(`Step1b FAIL — trend UP, LONG only (got ${dir})`);    return null; }
-    if (trendEffective === 'DOWN'    && dir !== 'SHORT') { L(`Step1b FAIL — trend DOWN, SHORT only (got ${dir})`); return null; }
-    if (trendEffective === 'NEUTRAL')                    { L(`Step1b FAIL — trend NEUTRAL, no trade`);             return null; }
-  }
-  L(`Step1b PASS ✓ — trend=${trendEffective} (4H=${trend4h}) → ${dir} ✓`);
+    const conflict1m = choch1m && now - choch1m.candleTs < CHOCH_1M_RECENCY &&
+      ((dir === 'SHORT' && choch1m.direction === 'BULLISH') || (dir === 'LONG' && choch1m.direction === 'BEARISH'));
 
-  // ── Step 1c: VWAP directional filter ────────────────────────────────────
-  // Standard momentum: above VWAP → LONG, below VWAP → SHORT.
-  //
-  // SMC reversal exception: HL/LH entries are accumulation/distribution setups.
-  //   HL (LONG reversal) naturally forms BELOW VWAP — smart money accumulates
-  //   in the discount zone before pushing price up. Blocking it kills the best entries.
-  //   LH (SHORT reversal) naturally forms ABOVE VWAP — distribution zone.
-  //   So for reversal patterns: INVERT the VWAP expectation.
-  if (_vwap !== null) {
-    const aboveVwap = price >= _vwap;
-    if (structureMatchesDir) {
-      // Reversal pattern — HL should be below VWAP, LH should be above VWAP
-      const validReversalVwap = (dir === 'LONG' && !aboveVwap) || (dir === 'SHORT' && aboveVwap);
-      if (validReversalVwap) {
-        L(`Step1c PASS ✓ (reversal) — ${dir} at ${aboveVwap ? 'premium' : 'discount'} VWAP=${_vwap.toFixed(2)} price=${price.toFixed(2)} ✓ accumulation zone`);
-      } else {
-        // HL above VWAP or LH below VWAP — already past fair value, weaker setup but allow
-        L(`Step1c PASS (reversal, already extended) — ${dir} price=${price.toFixed(2)} VWAP=${_vwap.toFixed(2)}`);
-      }
-    } else {
-      // Momentum entry — must be on correct side of VWAP
-      if (dir === 'SHORT' && aboveVwap) {
-        L(`Step1c FAIL — price ${price.toFixed(2)} above VWAP ${_vwap.toFixed(2)}, SHORT blocked`);
-        return null;
-      }
-      if (dir === 'LONG' && !aboveVwap) {
-        L(`Step1c FAIL — price ${price.toFixed(2)} below VWAP ${_vwap.toFixed(2)}, LONG blocked`);
-        return null;
-      }
-      L(`Step1c PASS ✓ — VWAP=${_vwap.toFixed(2)} price=${price.toFixed(2)} bias=${aboveVwap ? 'LONG' : 'SHORT'} matches ${dir}`);
-    }
-  }
-  // ── Step 1d: RSI momentum gate ──────────────────────────────────────────
-  // Block entries when the 15m move is already exhausted:
-  //   LONG  with RSI > 65 → price already extended up, mean-revert risk
-  //   SHORT with RSI < 35 → price already extended down, snap-back risk
-  // Using 15m bars so the RSI reflects the timeframe we're trading.
-  {
-    const rsi15 = calcRSI(bars15m, 14);
-    if (rsi15 !== null) {
-      if (dir === 'LONG'  && rsi15 > 65) {
-        L(`Step1d FAIL — RSI ${rsi15.toFixed(1)} > 65, LONG blocked (overbought — no room to rally)`);
-        return null;
-      }
-      if (dir === 'SHORT' && rsi15 < 35) {
-        L(`Step1d FAIL — RSI ${rsi15.toFixed(1)} < 35, SHORT blocked (oversold — no room to drop)`);
-        return null;
-      }
-      L(`Step1d PASS ✓ — RSI ${rsi15.toFixed(1)} valid for ${dir}`);
-    }
-  }
-
-  // ── Step 1e: ADX trend-strength gate ────────────────────────────────────
-  // Block entries when the 4H market is choppy/ranging (ADX < 18).
-  // ADX < 18 = no directional momentum — pivot entries mean-revert instead of trending.
-  // ADX 18-25 = weak but usable trend; ADX > 25 = clear trend, best setups.
-  {
-    const adx4h = calcADX(bars4h, 14);
-    const adxMin = _testOverrides?.adxMin ?? 18;
-    if (adx4h !== null && adx4h < adxMin) {
-      L(`Step1e FAIL — ADX ${adx4h.toFixed(1)} < ${adxMin}, market ranging (no directional edge)`);
+    if (conflict1m) {
+      const redirectDir = dir === 'SHORT' ? 'LONG' : 'SHORT';
+      _chochRedirectMap.set(sym, { redirectDir, blockedDir: dir, blockedAt: now, expiresAt: now + 4 * 60 * 60_000 });
+      L(`Step1c BLOCKED — 1m CHoCH=${choch1m.direction} conflicts with ${dir} → redirect to ${redirectDir}`);
       return null;
     }
-    if (adx4h !== null) L(`Step1e PASS ✓ — ADX ${adx4h.toFixed(1)} trending`);
   }
 
   // ── STEP 2: Find 1m swing HIGH (LH or HH) for SHORT, swing LOW (HL or LL) for LONG ──
   // Accept any confirmed 1m pivot in the right direction — HH and LH both anchor a SHORT;
   // HL and LL both anchor a LONG. Pick the highest high (SHORT) or lowest low (LONG)
   // within WINDOW_MS of the 15m pivot bar to get the best structural level.
+  const { ph: ph1, pl: pl1 } = _allPivots(bars1m);
   let pivot1m = null;
 
   if (dir === 'SHORT') {
@@ -2686,33 +2389,10 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
     }
   }
   if (!pivot1m) {
-    L(`Step2 WAIT - 15m ${label} needs 1m ${dir === 'SHORT' ? 'LH/HH' : 'HL/LL'} confirmation before entry`);
+    L(`Step2 WAIT — no 1m swing ${dir === 'SHORT' ? 'HIGH' : 'LOW'} within window of 15m pivot`);
     return null;
   }
-  L(`Step2 PASS ✓ — 1m ${dir === 'SHORT' ? 'LH/HH' : 'HL/LL'} swing @ ${pivot1m.price.toFixed(2)}`);
-
-  // ── STEP 2c: CHoCH flip — 1m pivot must be HL (LONG) or LH (SHORT) ──
-  // After a 15m CHoCH flip, a normal impulse candle is NOT enough — we need
-  // the 1m to confirm with a HL (Higher Low) for LONG or LH (Lower High) for SHORT.
-  // If the 1m pivot is a LL (for LONG) or HH (for SHORT), price is still running
-  // in the old direction — wait for the actual HL/LH flip to form.
-  if (isChochFlip) {
-    if (dir === 'LONG') {
-      const prevPl1 = pl1.filter(p => p.barTs < pivot1m.barTs).slice(-1)[0];
-      if (prevPl1 && pivot1m.price <= prevPl1.price) {
-        L(`Step2c FAIL — 1m LL (${pivot1m.price.toFixed(2)} <= prev ${prevPl1.price.toFixed(2)}) — need HL, waiting`);
-        return null;
-      }
-      L(`Step2c PASS ✓ — 1m HL confirmed @ ${pivot1m.price.toFixed(2)}`);
-    } else {
-      const prevPh1 = ph1.filter(p => p.barTs < pivot1m.barTs).slice(-1)[0];
-      if (prevPh1 && pivot1m.price >= prevPh1.price) {
-        L(`Step2c FAIL — 1m HH (${pivot1m.price.toFixed(2)} >= prev ${prevPh1.price.toFixed(2)}) — need LH, waiting`);
-        return null;
-      }
-      L(`Step2c PASS ✓ — 1m LH confirmed @ ${pivot1m.price.toFixed(2)}`);
-    }
-  }
+  L(`Step2 PASS ✓ — 1m swing ${dir === 'SHORT' ? 'HIGH' : 'LOW'} @ ${pivot1m.price.toFixed(2)}`);
 
   // ── STEP 2b: 1m pivot level must be close to 15m pivot ──────────────
   const LEVEL_TOL = cfg.slPct * 2;
@@ -2722,17 +2402,15 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
     return null;
   }
 
-  // ── STEP 3: 1m pivot freshness from NOW (≤ 30 min) ──────────────────
-  // 15m structure + 1m pivot must align. After the 15m pivot confirms it
-  // can take 10-25 min for the 1m swing to fully print (2L/2R pivot needs
-  // 2 bars each side = 4 min minimum lag). 10-bar limit was too tight and
-  // killed most valid setups. 30 bars = 30 min gives the entry window room.
+  // ── STEP 3: 1m pivot freshness from NOW (≤ 10 min) ──────────────────
+  // If the 1m entry pivot is >10 bars old, the entry window already passed —
+  // price has moved away from the LH/HL level. Skip and wait for a fresh 1m pivot.
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
-  if (bars1mNowAge > 30) {
-    L(`Step3 FAIL - 1m pivot is ${bars1mNowAge} bars old (max 30) - entry missed, reset`);
+  if (bars1mNowAge > 10) {
+    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 10) — entry missed, reset`);
     return null;
   }
-  L(`Step3 PASS - 1m pivot is ${bars1mNowAge} bars old`);
+  L(`Step3 PASS ✓ — 1m pivot is ${bars1mNowAge} bars old`);
 
   // ── STEP 4: Chase filter — entry must be within ENTRY_TOL of the 1m pivot ──
   if (dir === 'LONG'  && price > pivot1m.price * (1 + ENTRY_TOL)) {
@@ -2747,29 +2425,15 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
   // ── Cooldown: each 15m pivot LEVEL fires at most once ───────────────
   // Use pivot15.barTs so a CHoCH LONG at pivot A does not block a SHORT at pivot B.
   // Different pivot levels are independent setups — only the same level is deduplicated.
-  const prev1m = bars1m[bars1m.length - 2] || null;
-  if (dir === 'SHORT') {
-    const bearishConfirm = cur.c < cur.o && (!prev1m || cur.c < prev1m.c);
-    if (!bearishConfirm) {
-      L(`Step4a FAIL — SHORT needs bearish confirmation candle (o=${cur.o.toFixed(2)} c=${cur.c.toFixed(2)} prevC=${prev1m ? prev1m.c.toFixed(2) : 'n/a'})`);
-      return null;
-    }
-  } else {
-    const bullishConfirm = cur.c > cur.o && (!prev1m || cur.c > prev1m.c);
-    if (!bullishConfirm) {
-      L(`Step4a FAIL — LONG needs bullish confirmation candle (o=${cur.o.toFixed(2)} c=${cur.c.toFixed(2)} prevC=${prev1m ? prev1m.c.toFixed(2) : 'n/a'})`);
-      return null;
-    }
-  }
-
   const cdKey = `${sym}_KL_${pivot15.barTs}`;
   const SYMBOL_CD = 60 * 60_000;
   if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < SYMBOL_CD) return null;
+  cooldowns.set(cdKey, now);
 
   const sl   = dir === 'LONG' ? pivot1m.price * (1 - cfg.slPct) : pivot1m.price * (1 + cfg.slPct);
-  const tp1  = dir === 'LONG' ? price * (1 + cfg.slPct * TP1_MULT)  : price * (1 - cfg.slPct * TP1_MULT);
-  const tp2  = dir === 'LONG' ? price * (1 + cfg.slPct * TP2_MULT)  : price * (1 - cfg.slPct * TP2_MULT);
-  const lock = dir === 'LONG' ? price * (1 + cfg.slPct * LOCK_MULT) : price * (1 - cfg.slPct * LOCK_MULT);
+  const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)           : price * (1 - TP1_PCT);
+  const tp2  = dir === 'LONG' ? price * (1 + TP2_PCT)           : price * (1 - TP2_PCT);
+  const lock = dir === 'LONG' ? price * (1 + LOCK_PCT)          : price * (1 - LOCK_PCT);
 
   let trend = 'UNKNOWN';
   try { trend = classifyTrend(bars4h ?? []); } catch (_) {}
@@ -2791,11 +2455,10 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
     sl, tp1, tp2,
     lockAt:   lock,
     slPct:    (cfg.slPct * 100).toFixed(2) + '%',
-    tp1Pct:   (cfg.slPct * TP1_MULT * 100).toFixed(2) + '%',
-    tp2Pct:   (cfg.slPct * TP2_MULT * 100).toFixed(2) + '%',
+    tp1Pct:   (TP1_PCT  * 100).toFixed(2) + '%',
+    tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
     trend,
     pivot15m: pivot15.price,
-    pivot15Ts: pivot15.barTs,
     pivot1m:  pivot1m.price,
     ltfUsed:  '1m',
     ts:       now,
@@ -2804,10 +2467,6 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
 }
 
 module.exports = {
-  // ── New signal-quality helpers ────────────────────────────────
-  calcRSI,
-  calcADX,
-
   // ── Existing ICT pipeline exports (unchanged) ────────────────
   fetchCandles,
   detectPivots,
@@ -2830,13 +2489,12 @@ module.exports = {
   analyzeSMC,
   MIN_RR,
   KILLZONES_UTC,
-  setTestOverrides,   // backtest-only: override killzone hours and ADX threshold
 
   // ── Pattern engine exports (v3 backtested) ────────────────────
   TRADING_CONFIG,   // token list with TF + SL settings (no XRP)
-  TP1_MULT,
-  TP2_MULT,
-  LOCK_MULT,
+  TP1_PCT,
+  TP2_PCT,
+  LOCK_PCT,
   classifyTrend,    // 4H EMA trend state
   isTrendAligned,   // asymmetric trend filter
   detectHL,
