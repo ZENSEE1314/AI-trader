@@ -2139,63 +2139,7 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, d
     }
   }
 
-  if (!hhPivot) {
-    D(`LONG skip: no recent HH (all highs are LH within last ${STRUCT_BARS_15M} bars)`);
-    return null;
-  }
-
-  const hhAge = (bars15mLen - 1) - hhPivot.idx;
-  // prevHL = pivot low just before the HH (used to qualify HL)
-  const prevHL = pl15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
-
-  // HL = most recent pivot LOW after the HH that is HIGHER than the previous pivot low
-  const plAfterHH = pl15.filter(p => p.barTs > hhPivot.barTs);
-  let hlPivot = null;
-  for (let i = plAfterHH.length - 1; i >= 1; i--) {
-    if (plAfterHH[i].price > plAfterHH[i - 1].price) { hlPivot = plAfterHH[i]; break; }
-  }
-  // If no relative HL found, accept any pivot low after HH that is above prevHL
-  if (!hlPivot && plAfterHH.length > 0) {
-    hlPivot = plAfterHH[plAfterHH.length - 1];
-  }
-  // Must be above the pivot low that preceded the HH (genuine HL, not a lower low)
-  if (hlPivot && prevHL && hlPivot.price <= prevHL.price) {
-    D(`LONG skip: HL@${hlPivot.price.toFixed(2)} <= prevHL@${prevHL.price.toFixed(2)} (LL break)`);
-    return null;
-  }
-
-  if (!hlPivot) {
-    D(`LONG skip: no HL after HH@${hhPivot.price.toFixed(2)} (hhAge=${hhAge})`);
-    return null;
-  }
-
-  const hlAge = (bars15mLen - 1) - hlPivot.idx;
-
-  // Structure check: did any bar close BELOW hlPivot after it formed?
-  const barsAfterHL = bars15m.filter(b => b.t > hlPivot.barTs);
-  const hlBrokenDown = barsAfterHL.some(b => b.c < hlPivot.price * (1 - EXTREME_TOL));
-  if (hlBrokenDown) {
-    // HL broken DOWNWARD = bearish CHoCH on 15m (HH→HL context flips to SHORT)
-    // The broken HL now acts as the new LH resistance — enter SHORT from here.
-    if (hlAge <= PIVOT_FRESH_BARS) {
-      D(`HH→CHoCH↓ SHORT flip: HL@${hlPivot.price.toFixed(2)} broken down (hlAge=${hlAge}) → SHORT`);
-      return { dir: 'SHORT', pivot15: hlPivot, preceding: hhPivot, label: 'HH→CHoCH↓' };
-    }
-    D(`LONG skip: HL broken down but too old (hlAge=${hlAge})`);
-    return null;
-  }
-
-  const pullbackPct = (hhPivot.price - hlPivot.price) / hhPivot.price;
-
-  if (hlAge > PIVOT_FRESH_BARS) {
-    D(`LONG skip: HL age=${hlAge} > PIVOT_FRESH_BARS=${PIVOT_FRESH_BARS}`);
-  } else if (pullbackPct < slPct * 2) {
-    D(`LONG skip: pullback too small ${(pullbackPct*100).toFixed(3)}% < ${(slPct*2*100).toFixed(3)}%`);
-  } else {
-    return { dir: 'LONG', pivot15: hlPivot, preceding: hhPivot, label: 'HH→HL' };
-  }
-
-  return null;
+  return null; // sideways / incomplete structure → no trade
 }
 
 // ── _detect15mPivot ───────────────────────────────────────────────────
