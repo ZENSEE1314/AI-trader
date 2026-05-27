@@ -73,7 +73,9 @@ function genBars15m(symbol, n) {
     return u * Math.sqrt(-2 * Math.log(s) / s);
   };
 
-  const BASE_TS = Date.now() - n * 15 * 60_000;
+  // Fixed anchor: Monday 2026-01-05 07:00 UTC — ensures each batch of 2000×15m bars
+  // starts at London open, giving stable kill zone coverage across runs.
+  const BASE_TS = new Date('2026-01-05T07:00:00Z').getTime() - n * 15 * 60_000;
   const bars = [];
   let price  = p.price;
   let volMul = 1;
