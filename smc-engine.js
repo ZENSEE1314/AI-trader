@@ -2065,90 +2065,60 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002) {
 
   const bars15mLen = bars15m.length;
 
-  // Use actual candle data for global extremes — catches spiky moves that aren't 2L/2R pivots.
-  // This prevents treating a local LH as HH when an older HH candle exists in the window.
-  const globalMaxH = Math.max(...bars15m.map(b => b.h));
-  const globalMinL = Math.min(...bars15m.map(b => b.l));
-  const EXTREME_TOL = 0.002; // 0.2% — candle must be within this of true extreme to count
+  // Use the last 2 adjacent pivot highs and lows — this is how the TradingView SMC
+  // indicator determines HH/LH/HL/LL. It correctly captures the CURRENT trend's
+  // HH (not the global max from 50h ago) and the CURRENT LL (not a stale global min).
+  const lastH = ph15[ph15.length - 1];  // most recent confirmed 15m pivot HIGH
+  const prevH = ph15[ph15.length - 2];  // previous confirmed 15m pivot HIGH
+  const lastL = pl15[pl15.length - 1];  // most recent confirmed 15m pivot LOW
+  const prevL = pl15[pl15.length - 2];  // previous confirmed 15m pivot LOW
 
-  // Index of the bar containing the global minimum low (for LONG guard below)
-  const globalMinIdx = bars15m.reduce(
-    (minIdx, b, i) => b.l < bars15m[minIdx].l ? i : minIdx, 0
-  );
-  const globalMinAge = (bars15mLen - 1) - globalMinIdx;
+  const lastHAge = (bars15mLen - 1) - lastH.idx;
+  const lastLAge = (bars15mLen - 1) - lastL.idx;
 
-  // ── SHORT: LL → LH ───────────────────────────────────────────────
-  // Find the TRUE LL: pivot low nearest the global candle minimum.
-  // Then find the most recent pivot HIGH after it that is a genuine LH
-  // (below the global candle max — not the new HH).
-  const llPivot = pl15.reduce((min, p) => p.price < min.price ? p : min, pl15[0]);
-  const llAge   = (bars15mLen - 1) - llPivot.idx;
+  // ── SHORT: LL → LH ────────────────────────────────────────────────
+  // LH = most recent pivot HIGH is lower than the one before it
+  // LL = most recent pivot LOW (before the LH) is lower than the one before it
+  const isLH = lastH.price < prevH.price;
 
-  if (llAge <= STRUCT_BARS_15M) {
-    const lhCandidates = ph15.filter(p =>
-      p.barTs > llPivot.barTs &&                        // LH formed AFTER the LL
-      p.price < globalMaxH * (1 - EXTREME_TOL)          // NOT the global max → genuine LH
-    );
-    if (lhCandidates.length > 0) {
-      const lh    = lhCandidates[lhCandidates.length - 1]; // most recent valid LH
-      const lhAge = (bars15mLen - 1) - lh.idx;
+  if (isLH && lastH.barTs > lastL.barTs) {
+    const isLL  = lastL.price < prevL.price;
+    const lhAge = lastHAge;
+    const llAge = lastLAge;
 
-      // CHoCH guard: if the bounce from LL to LH broke above the last pivot high
-      // that existed BEFORE the LL, a CHoCH (trend flip) happened in between.
-      // LL + CHoCH + LH = ambiguous structure → user rule: reset, no trade.
-      const highsBeforeLL = ph15.filter(p => p.barTs < llPivot.barTs);
+    if (isLL && lhAge <= PIVOT_FRESH_BARS && llAge <= STRUCT_BARS_15M) {
+      // CHoCH guard: bounce from LL to LH broke prior pivot high → ambiguous → no SHORT
+      const highsBeforeLL = ph15.filter(p => p.barTs < lastL.barTs);
       const prevHHprice   = highsBeforeLL.length > 0
         ? Math.max(...highsBeforeLL.map(p => p.price))
-        : globalMaxH; // no prior high → use global max as guard level
-      const barsInBounce  = bars15m.filter(b => b.t > llPivot.barTs && b.t < lh.barTs);
+        : prevH.price;
+      const barsInBounce  = bars15m.filter(b => b.t > lastL.barTs && b.t < lastH.barTs);
       const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
-      if (chochHappened) return null; // CHoCH between LL and LH → reset
+      if (chochHappened) return null;
 
-      // Minimum bounce: LL→LH must span at least 2×slPct or the range is too tight
-      // (a ranging market produces many micro LL→LH patterns that aren't real downtrends)
-      const bouncePct = (lh.price - llPivot.price) / llPivot.price;
-      if (bouncePct < slPct * 2) return null;
-
-      if (lhAge <= PIVOT_FRESH_BARS) {
-        return { dir: 'SHORT', pivot15: lh, preceding: llPivot, label: 'LL→LH' };
+      // Minimum bounce: LL→LH must span ≥ 2×slPct (filters ranging micro-patterns)
+      const bouncePct = (lastH.price - lastL.price) / lastL.price;
+      if (bouncePct >= slPct * 2) {
+        return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
       }
     }
   }
 
   // ── LONG: HH → HL ────────────────────────────────────────────────
-  // Find the TRUE HH: pivot high nearest the global candle maximum.
-  // Then find the most recent pivot LOW after it that is a genuine HL
-  // (above the global candle min — not a new LL).
-  // Extra guard: if any pivot low between the HH and HL went below the pre-HH
-  // minimum → structure broke → LONG invalid.
-  //
-  // LL guard: if the global minimum low (LL) formed within STRUCT_BARS_15M bars,
-  // the market is in a reversal-bounce context (LL + CHoCH → LH masquerading as HH).
-  // User rule: "LL with CHoCH uptrend, if shows LH → no trade, reset."
-  if (globalMinAge <= STRUCT_BARS_15M) return null; // recent LL → reversal bounce → no LONG
+  // HL = most recent pivot LOW is higher than the one before it
+  // HH = most recent pivot HIGH (before the HL) is higher than the one before it
+  const isHL = lastL.price > prevL.price;
 
-  const hhPivot = ph15.reduce((max, p) => p.price > max.price ? p : max, ph15[0]);
-  const hhAge   = (bars15mLen - 1) - hhPivot.idx;
+  if (isHL && lastL.barTs > lastH.barTs) {
+    const isHH  = lastH.price > prevH.price;
+    const hlAge = lastLAge;
+    const hhAge = lastHAge;
 
-  if (hhAge <= STRUCT_BARS_15M) {
-    const hlCandidates = pl15.filter(p =>
-      p.barTs > hhPivot.barTs &&                        // HL formed AFTER the HH
-      p.price > globalMinL * (1 + EXTREME_TOL)          // NOT the global min → genuine HL
-    );
-    if (hlCandidates.length > 0) {
-      const hl    = hlCandidates[hlCandidates.length - 1]; // most recent valid HL
-      const hlAge = (bars15mLen - 1) - hl.idx;
-
-      // Reject if a LL was made between HH and HL (bearish structure break)
-      const lowestBetween = hlCandidates.reduce(
-        (min, p) => p.price < min ? p.price : min, Infinity
-      );
-      const noLLbreak = lowestBetween >= globalMinL * (1 + EXTREME_TOL);
-
-      // Minimum pullback: HH→HL must span at least 2×slPct or the range is too tight
-      const pullbackPct = (hhPivot.price - hl.price) / hhPivot.price;
-      if (hlAge <= PIVOT_FRESH_BARS && noLLbreak && pullbackPct >= slPct * 2) {
-        return { dir: 'LONG', pivot15: hl, preceding: hhPivot, label: 'HH→HL' };
+    if (isHH && hlAge <= PIVOT_FRESH_BARS && hhAge <= STRUCT_BARS_15M) {
+      // Minimum pullback: HH→HL must span ≥ 2×slPct (filters ranging micro-patterns)
+      const pullbackPct = (lastH.price - lastL.price) / lastH.price;
+      if (pullbackPct >= slPct * 2) {
+        return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
       }
     }
   }
