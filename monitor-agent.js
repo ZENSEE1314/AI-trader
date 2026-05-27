@@ -23,18 +23,28 @@ function getStore() {
 
 // ── Setup parsing ─────────────────────────────────────────────────────────────
 
-// Extracts the pivot suffix from a setup string like "V4-LONG-HL+HL" → "HL+HL".
+// Extracts a human-readable label from a setup string.
+// New SMC format: "LL→LH(SHORT)@15m+1m"  → "LL→LH(SHORT)"
+// Old format:     "V4-LONG-HL+HL"         → "HL+HL"
 function parsePivotSuffix(setup) {
   if (!setup) return '';
+  // New SMC format embeds direction in parens before "@"
+  if (setup.includes('@')) return setup.split('@')[0];
+  // Old format: everything after the last dash
   const lastDash = setup.lastIndexOf('-');
   return lastDash === -1 ? setup : setup.slice(lastDash + 1);
 }
 
-// Returns true when the pivot suffix and direction combination is invalid.
-// LONG is only valid on HL/LL pivots (demand zones). SHORT on HH/LH (supply).
+// Returns true when the direction disagrees with the setup label.
+// New SMC setups embed the intended direction as "(LONG)" or "(SHORT)" — use that.
+// Old setups use pivot-name heuristics: LONG on demand (HL/LL), SHORT on supply (HH/LH).
 function isAnomalous(direction, setup) {
+  if (!setup) return false;
+  if (setup.includes('(LONG)'))  return direction !== 'LONG';
+  if (setup.includes('(SHORT)')) return direction !== 'SHORT';
+  // Old format fallback
   const pivot = parsePivotSuffix(setup).toUpperCase();
-  if (direction === 'LONG' && (pivot.includes('HH') || pivot.includes('LH'))) return true;
+  if (direction === 'LONG'  && (pivot.includes('HH') || pivot.includes('LH'))) return true;
   if (direction === 'SHORT' && (pivot.includes('HL') || pivot.includes('LL'))) return true;
   return false;
 }
@@ -42,9 +52,9 @@ function isAnomalous(direction, setup) {
 function anomalyExplanation(direction, setup) {
   const pivot = parsePivotSuffix(setup);
   if (direction === 'LONG') {
-    return `LONG entered on supply pivot "${pivot}" — only HL or LL pivots are valid LONG setups`;
+    return `LONG entered on supply pivot "${pivot}" — expected a demand-side setup`;
   }
-  return `SHORT entered on demand pivot "${pivot}" — only HH or LH pivots are valid SHORT setups`;
+  return `SHORT entered on demand pivot "${pivot}" — expected a supply-side setup`;
 }
 
 // ── Streak calculation ────────────────────────────────────────────────────────
