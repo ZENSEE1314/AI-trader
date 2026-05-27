@@ -1090,21 +1090,21 @@ const _chochRedirectMap = new Map();
 // slPct = stop-loss % from pattern level (optimized per token)
 // label = human-readable TF label
 const TRADING_CONFIG = {
-  BTCUSDT:  { iv:'15',  slPct:0.0025, label:'15M', name:'BTC'  },
-  ETHUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ETH'  },
-  SOLUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'SOL'  },
-  BNBUSDT:  { iv:'15',  slPct:0.0030, label:'15M', name:'BNB'  },
-  ADAUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ADA'  },
-  DOTUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'DOT'  },
-  LINKUSDT: { iv:'15',  slPct:0.0030, label:'15M', name:'LINK' },
+  BTCUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'BTC'  },
+  ETHUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'ETH'  },
+  SOLUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'SOL'  },
+  BNBUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'BNB'  },
+  ADAUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'ADA'  },
+  DOTUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'DOT'  },
+  LINKUSDT: { iv:'15',  slPct:0.005, label:'15M', name:'LINK' },
   // AVAXUSDT removed — noisy price action, consistent -0.56R avg in backtests across all regimes
-  LTCUSDT:  { iv:'15',  slPct:0.0025, label:'15M', name:'LTC'  },
+  LTCUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'LTC'  },
   // XRP removed — 49% WR after fees, not profitable
   // All tokens: 15M primary + 1M LTF confirmation (follows BTC 15M+1M standard)
 };
 
 // ── TP / lock constants (same for all tokens) ────────────────────
-const TP1_PCT   = 0.005;   // 0.5%  — close 50% of position at TP1
+const TP1_PCT   = 0.003;   // 0.3%  — close 50% of position at TP1 (tightened: natural move ~0.25-0.30%)
 const TP2_PCT   = 0.010;   // 1.0%  — close remaining 50% at TP2
 const LOCK_PCT  = 0.0025;  // +0.25% — slide SL to lock after TP1 hit
 const PAT_TOL   = 0.002;   // 0.2% proximity to pattern level — tight so bot enters AT the LH/HL, not after price already moved away
