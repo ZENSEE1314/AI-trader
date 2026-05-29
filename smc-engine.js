@@ -1107,7 +1107,7 @@ const TRADING_CONFIG = {
 const TP1_PCT   = 0.003;   // 0.3%  — close 50% of position at TP1 (tightened: natural move ~0.25-0.30%)
 const TP2_PCT   = 0.010;   // 1.0%  — close remaining 50% at TP2
 const LOCK_PCT  = 0.0025;  // +0.25% — slide SL to lock after TP1 hit
-const PAT_TOL   = 0.002;   // 0.2% proximity to pattern level — tight so bot enters AT the LH/HL, not after price already moved away
+const PAT_TOL   = 0.005;   // 0.2% proximity to pattern level — tight so bot enters AT the LH/HL, not after price already moved away
 const PAT_WINGS = 2;       // bars each side to confirm pivot — was 3 (45min lag), 2 = 30min on 15m
 const PAT_LKBK  = 60;     // bars lookback for pivot detection
 const PAT_CD    = 45 * 60_000;  // 45-min cooldown — was 2H, shortened so HL#1 + HL#2 both fire
@@ -2010,7 +2010,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 const STRUCT_BARS_15M  = 60;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 15 h old
 const PIVOT_FRESH_BARS = 16;        // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤16 bars = 4 h old
 const WINDOW_MS        = 2 * 60 * 60_000; // 1m pivot must form within 2 h of the 15m pivot bar open
-const ENTRY_TOL        = 0.002;     // MUST equal slPct — entry must be within slPct% of the 1m HL/LH.
+const ENTRY_TOL        = 0.005;     // MUST equal slPct — entry must be within slPct% of the 1m HL/LH.
                                     // If ENTRY_TOL > slPct the SL would float above the structural HL when
                                     // entering at max drift, blowing out capital by 2× slPct × leverage.
 
