@@ -2220,21 +2220,12 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   const now   = cur.t;
   const price = cur.c;
 
-  // ── STEP 0: Kill zone filter ─────────────────────────────────────────────
-  // Asian session (01-04 UTC) wins only 11% of the time — nearly pure noise.
-  // Off-hours overall: 34% win rate.  London (07-10 UTC) + NY AM (12-16 UTC): 50% win rate.
-  // Only fire signals during high-liquidity kill zones where institutional
-  // order flow drives real directional moves rather than thin-market fakeouts.
+  // ── STEP 0: All hours — no kill zone filter ──────────────────────────────
+  // Backtest: all-hours 55% WR / +$3,197 vs kill-zone-only 58% WR / +$719
+  // More trades at similar quality → better total return.
   {
-    const d    = new Date(now);
-    const hUTC = d.getUTCHours() + d.getUTCMinutes() / 60;
-    const inLondon = hUTC >= 7  && hUTC < 10;   // 07:00–10:00 UTC
-    const inNY     = hUTC >= 12 && hUTC < 16;   // 12:00–16:00 UTC (AM + Silver)
-    if (!inLondon && !inNY) {
-      L(`Step0 SKIP — outside kill zone (${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC, need 07-10 or 12-16)`);
-      return null;
-    }
-    L(`Step0 PASS ✓ — kill zone active ${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC`);
+    const d = new Date(now);
+    L(`Step0 PASS ✓ — all hours active ${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC`);
   }
 
   // ── STEP 1: 15m structure — two-pivot sequence (normal) or single pivot (redirect) ──
@@ -2304,27 +2295,8 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   }
   L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}${isChochFlip ? ' (CHoCH flip bypass)' : ''}`);
 
-  // ── Step 1c: 1m CHoCH conflict → store redirect ──────────────────────
-  // Only the 1m CHoCH triggers a flip. 15m CHoCH is NOT checked here —
-  // 15m structure is already the signal source, so checking 15m CHoCH
-  // would double-filter the same timeframe.
-  // If 15m structure says SHORT but 1m CHoCH is BULLISH → block SHORT, redirect LONG.
-  // If 15m structure says LONG  but 1m CHoCH is BEARISH → block LONG,  redirect SHORT.
-  if (!_chochRedirectMap.has(sym)) {
-    const CHOCH_1M_RECENCY = 90 * 60_000; // 90 min
-
-    const choch1m = detectCHoCH(bars1m, _toPivotsForCHoCH(bars1m), 90);
-
-    const conflict1m = choch1m && now - choch1m.candleTs < CHOCH_1M_RECENCY &&
-      ((dir === 'SHORT' && choch1m.direction === 'BULLISH') || (dir === 'LONG' && choch1m.direction === 'BEARISH'));
-
-    if (conflict1m) {
-      const redirectDir = dir === 'SHORT' ? 'LONG' : 'SHORT';
-      _chochRedirectMap.set(sym, { redirectDir, blockedDir: dir, blockedAt: now, expiresAt: now + 4 * 60 * 60_000 });
-      L(`Step1c BLOCKED — 1m CHoCH=${choch1m.direction} conflicts with ${dir} → redirect to ${redirectDir}`);
-      return null;
-    }
-  }
+  // Step 1c removed — 1m CHoCH conflict check disabled.
+  // Backtest shows HL/LH structure holds across all hours without it.
 
   // ── STEP 2: Find 1m swing HIGH (LH or HH) for SHORT, swing LOW (HL or LL) for LONG ──
   // Accept any confirmed 1m pivot in the right direction — HH and LH both anchor a SHORT;
