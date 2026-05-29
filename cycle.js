@@ -975,7 +975,9 @@ async function checkTrailingStop(client) {
       const closeSide = isLong ? 'SELL' : 'BUY';
       const gain = isLong ? (cur - entry) / entry : (entry - cur) / entry;
 
-      // 15m structure break exit check
+      // 15m structure break exit check — only for bot-opened trades
+      const _stateForExit = tradeState.get(sym);
+      if (!_stateForExit) continue; // manual trade — don't touch it
       const earlyExitParams = await aiLearner.getOptimalParams();
       const earlyExitEnabled = earlyExitParams.EARLY_EXIT_ENABLED !== false;
       try {
