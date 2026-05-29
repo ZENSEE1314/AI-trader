@@ -2221,11 +2221,27 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   const price = cur.c;
 
   // ── STEP 0: All hours — no kill zone filter ──────────────────────────────
-  // Backtest: all-hours 55% WR / +$3,197 vs kill-zone-only 58% WR / +$719
-  // More trades at similar quality → better total return.
   {
     const d = new Date(now);
     L(`Step0 PASS ✓ — all hours active ${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC`);
+  }
+
+  // ── STEP 0b: compute daily VWAP (used after Step1 to filter direction) ──
+  // VWAP resets at midnight UTC. Uses 15m bar volume (fallback=1 for synth data).
+  let _vwap = null;
+  {
+    const midnightUTC = now - (now % 86400000);
+    const todayBars   = bars15m.filter(b => b.t >= midnightUTC);
+    if (todayBars.length >= 3) {
+      let cumPV = 0, cumV = 0;
+      for (const b of todayBars) {
+        const tp  = (b.h + b.l + b.c) / 3;
+        const vol = b.v || 1;
+        cumPV += tp * vol;
+        cumV  += vol;
+      }
+      _vwap = cumPV / cumV;
+    }
   }
 
   // ── STEP 1: 15m structure — two-pivot sequence (normal) or single pivot (redirect) ──
@@ -2295,7 +2311,21 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   }
   L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}${isChochFlip ? ' (CHoCH flip bypass)' : ''}`);
 
-  // Step 1c removed — 1m CHoCH conflict check disabled.
+  // ── Step 1c: VWAP directional filter ────────────────────────────────────
+  // Above VWAP = buy-side pressure → LONG only (block SHORTs)
+  // Below VWAP = sell-side pressure → SHORT only (block LONGs)
+  if (_vwap !== null) {
+    const aboveVwap = price >= _vwap;
+    if (dir === 'SHORT' && aboveVwap) {
+      L(`Step1c FAIL — price ${price.toFixed(2)} above VWAP ${_vwap.toFixed(2)}, SHORT blocked`);
+      return null;
+    }
+    if (dir === 'LONG' && !aboveVwap) {
+      L(`Step1c FAIL — price ${price.toFixed(2)} below VWAP ${_vwap.toFixed(2)}, LONG blocked`);
+      return null;
+    }
+    L(`Step1c PASS ✓ — VWAP=${_vwap.toFixed(2)} price=${price.toFixed(2)} bias=${aboveVwap ? 'LONG' : 'SHORT'} matches ${dir}`);
+  }
   // Backtest shows HL/LH structure holds across all hours without it.
 
   // ── STEP 2: Find 1m swing HIGH (LH or HH) for SHORT, swing LOW (HL or LL) for LONG ──
