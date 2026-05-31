@@ -7,7 +7,8 @@
     "start": "node entry.js",
     "dev": "node server.js",
     "bot": "node bot.js",
-    "web": "node server.js"
+    "web": "node server.js",
+    "analyze:trades": "node analyze-trade-wr.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

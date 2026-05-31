@@ -1619,6 +1619,20 @@ async function main() {
       // ── Signal-type loss blocker ───────────────────────────────
       // If the same pivot+direction combo has lost ≥ 2 times, block it for 24h.
       // Prevents the bot from repeating the exact same losing pattern.
+      try {
+        const liveGate = await aiLearner.shouldBlockLiveTrade({
+          symbol: pick.symbol || pick.sym,
+          direction: pick.direction,
+          setup: setupName || pick.setup || 'unknown',
+        });
+        if (liveGate.block) {
+          bLog.trade(`LIVE-HISTORY BLOCKED: ${liveGate.reason}`);
+          continue;
+        }
+      } catch (histErr) {
+        bLog.error(`Live-history gate error: ${histErr.message} - allowing signal`);
+      }
+
       const sigPivot  = pick.type || pick.pivot || pick.setup || 'unknown';
       const sigKey    = `${pick.symbol}:${pick.direction}:${sigPivot}`;
       const sigRecord = _signalLossTracker.get(sigKey);
@@ -3805,6 +3819,9 @@ async function syncTradeStatus() {
             fundingFee = parseFloat(fundingFee.toFixed(4));
             grossPnl = parseFloat(grossPnl.toFixed(4));
             const status = pnlUsdt > 0 ? 'WIN' : 'LOSS';
+            const priceMovePct = isLong
+              ? ((exitPrice - entryPrice) / entryPrice) * 100
+              : ((entryPrice - exitPrice) / entryPrice) * 100;
 
             await db.query(
               `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW(),
@@ -3813,6 +3830,35 @@ async function syncTradeStatus() {
               [status, pnlUsdt, exitPrice, trade.id, tradingFee, grossPnl, fundingFee]
             );
             bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} funding=$${fundingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
+
+            try {
+              const durationMin = trade.created_at
+                ? Math.max(0, Math.round((Date.now() - new Date(trade.created_at).getTime()) / 60000))
+                : 0;
+              const tradeLesson = {
+                symbol: trade.symbol,
+                direction: trade.direction,
+                setup: trade.setup || trade.market_structure || 'unknown',
+                entryPrice,
+                exitPrice,
+                pnlPct: priceMovePct,
+                leverage: trade.leverage || key.leverage || 20,
+                durationMin,
+                session: aiLearner.getCurrentSession(),
+                slDistancePct: trade.sl_price ? Math.abs(entryPrice - parseFloat(trade.sl_price)) / entryPrice * 100 : null,
+                tpDistancePct: trade.tp_price ? Math.abs(parseFloat(trade.tp_price) - entryPrice) / entryPrice * 100 : null,
+                tf15m: trade.tf_15m || null,
+                tf3m: trade.tf_3m || null,
+                tf1m: trade.tf_1m || null,
+                marketStructure: trade.market_structure || null,
+                exitReason: 'exchange_sync',
+              };
+              await aiLearner.recordTrade(tradeLesson);
+              if (pnlUsdt > 0) await aiLearner.performWinAutopsy(tradeLesson);
+              else await aiLearner.performLossAutopsy(tradeLesson);
+            } catch (learnErr) {
+              bLog.error(`[AI-Learn] Failed to record synced trade ${trade.symbol}: ${learnErr.message}`);
+            }
 
             // Auto-sync: immediately re-fetch real PnL from Bitunix if we used estimated values.
             // realizedPnl null = we used market price fallback (price×qty estimate). Schedule

@@ -707,6 +707,93 @@ async function getPatternModifier(symbol, setup, direction, session, trend1hOrSt
   }
 }
 
+async function getLiveTradePatternStats({ symbol, setup, direction, days = 45 }) {
+  const params = [Math.max(1, parseInt(days, 10) || 45)];
+  const where = [
+    "status IN ('WIN','LOSS','TP','SL','CLOSED')",
+    "COALESCE(closed_at, created_at) > NOW() - ($1::text || ' days')::interval",
+    'pnl_usdt IS NOT NULL',
+  ];
+
+  if (symbol) {
+    params.push(symbol);
+    where.push(`symbol = $${params.length}`);
+  }
+  if (setup) {
+    params.push(setup);
+    where.push(`COALESCE(setup, market_structure, 'unknown') = $${params.length}`);
+  }
+  if (direction) {
+    params.push(direction);
+    where.push(`direction = $${params.length}`);
+  }
+
+  const [row] = await query(
+    `SELECT
+       COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE pnl_usdt > 0)::int AS wins,
+       COUNT(*) FILTER (WHERE pnl_usdt <= 0)::int AS losses,
+       COALESCE(SUM(pnl_usdt), 0)::float AS total_pnl,
+       COALESCE(AVG(pnl_usdt), 0)::float AS avg_pnl,
+       COALESCE(MAX(pnl_usdt), 0)::float AS best_pnl,
+       COALESCE(MIN(pnl_usdt), 0)::float AS worst_pnl
+     FROM trades
+     WHERE ${where.join(' AND ')}`,
+    params
+  );
+
+  const total = parseInt(row?.total || 0, 10);
+  const wins = parseInt(row?.wins || 0, 10);
+  const losses = parseInt(row?.losses || 0, 10);
+  return {
+    total,
+    wins,
+    losses,
+    winRate: total > 0 ? wins / total : 0,
+    totalPnl: parseFloat(row?.total_pnl || 0),
+    avgPnl: parseFloat(row?.avg_pnl || 0),
+    bestPnl: parseFloat(row?.best_pnl || 0),
+    worstPnl: parseFloat(row?.worst_pnl || 0),
+  };
+}
+
+async function shouldBlockLiveTrade({ symbol, setup, direction, days = 45 }) {
+  try {
+    const exact = await getLiveTradePatternStats({ symbol, setup, direction, days });
+    if (exact.total >= 3 && exact.totalPnl < 0 && exact.winRate < 0.35) {
+      return {
+        block: true,
+        reason: `${symbol} ${direction} ${setup || 'unknown'} live history is losing: ${(exact.winRate * 100).toFixed(1)}% WR, $${exact.totalPnl.toFixed(2)} over ${exact.total} trades`,
+        stats: exact,
+        scope: 'symbol_setup_direction',
+      };
+    }
+    if (exact.total >= 4 && exact.losses >= 3 && exact.avgPnl < 0) {
+      return {
+        block: true,
+        reason: `${symbol} ${direction} ${setup || 'unknown'} has ${exact.losses}/${exact.total} losses and negative average PnL`,
+        stats: exact,
+        scope: 'symbol_setup_direction',
+      };
+    }
+
+    const setupStats = await getLiveTradePatternStats({ setup, direction, days });
+    if (setupStats.total >= 6 && setupStats.totalPnl < 0 && setupStats.winRate < 0.30) {
+      return {
+        block: true,
+        reason: `${direction} ${setup || 'unknown'} setup is broadly losing: ${(setupStats.winRate * 100).toFixed(1)}% WR, $${setupStats.totalPnl.toFixed(2)} over ${setupStats.total} trades`,
+        stats: setupStats,
+        scope: 'setup_direction',
+      };
+    }
+
+    return { block: false, stats: exact, scope: 'symbol_setup_direction' };
+  } catch (err) {
+    console.error(`[AI Learner] Live trade gate failed: ${err.message}`);
+    return { block: false, error: err.message };
+  }
+}
+
 async function analyzeWorstPatterns() {
   try {
     const worst = await query(
@@ -910,6 +997,8 @@ module.exports = {
   performLossAutopsy,
   performWinAutopsy,
   getPatternModifier,
+  getLiveTradePatternStats,
+  shouldBlockLiveTrade,
   getStructureWinRate,
   getHourlyAnalysis,
   shouldTradeNow,

@@ -225,6 +225,22 @@ class TraderAgent extends BaseAgent {
           continue;
         }
 
+        try {
+          const liveGate = await aiLearner.shouldBlockLiveTrade({
+            symbol: pick.symbol || pick.sym,
+            direction: pick.direction,
+            setup: pick.setupName || pick.setup || 'unknown',
+          });
+          if (liveGate.block) {
+            this.logTrade(`LIVE-HISTORY BLOCKED: ${liveGate.reason}`);
+            this.tradesSkipped++;
+            this.addActivity('skip', `${pick.symbol} live history losing - skipped`);
+            continue;
+          }
+        } catch (histErr) {
+          this.logTrade(`Live-history gate error: ${histErr.message} - allowing signal`);
+        }
+
         // Backtest gate DISABLED per user direction (PR #78 disabled it in
         // cycle.js but TraderAgent had its own copy that PR missed). The
         // gate was blocking every TokenAgent signal because no current

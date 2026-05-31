@@ -484,8 +484,10 @@ async function initAllTables() {
       loss_count INTEGER DEFAULT 0,
       win_count INTEGER DEFAULT 0,
       current_penalty DECIMAL DEFAULT 0.0,
+      positive_boost DECIMAL DEFAULT 0.0,
       last_updated TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `ALTER TABLE pattern_penalties ADD COLUMN IF NOT EXISTS positive_boost DECIMAL DEFAULT 0.0`,
     `CREATE INDEX IF NOT EXISTS idx_pattern_dna ON pattern_penalties (pattern_dna)`,
 
     // Agent profiles — level, XP, earnings tracking (RPG system)
