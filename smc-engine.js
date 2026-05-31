@@ -2064,14 +2064,14 @@ function _toPivotsForCHoCH(bars) {
 // ── _detect15mStructure ───────────────────────────────────────────────
 // Detects a complete 2-pivot trend structure on the 15m chart:
 //
-//   SHORT: LL → LH   (saw a Lower Low, then price bounced to a Lower High)
-//     Wait for LL first. When LH confirms → SHORT setup ready.
+//   SHORT: LL → LH   (downtrend continuation)
+//   SHORT: HL → LH   (CHoCH — uptrend turning bearish)
 //
-//   LONG:  HH → HL   (saw a Higher High, then price pulled back to a Higher Low)
-//     Wait for HH first. When HL confirms → LONG setup ready.
+//   LONG:  HH → HL   (uptrend continuation)
+//   LONG:  LH → HL   (CHoCH — downtrend turning bullish)
 //
 // Both pivots must be within STRUCT_BARS_15M bars (3 h) — no stale setups.
-// Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
+// Sideways market → returns null → no trade.
 // minBouncePct: pass 0 — 2L/2R pivot detection on 15m candles is the sole judge.
 // The lowest candle in a 60-min window IS the HL; no artificial % filter on top.
 function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, dbg = null) {
@@ -2092,49 +2092,53 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002, d
   const lastHAge = (bars15mLen - 1) - lastH.idx;
   const lastLAge = (bars15mLen - 1) - lastL.idx;
 
-  // ── SHORT: LL → LH ────────────────────────────────────────────────
-  // LH = most recent pivot HIGH is lower than the one before it
-  // LL = most recent pivot LOW (before the LH) is lower than the one before it
-  const isLH = lastH.price < prevH.price;
+  const isLH = lastH.price < prevH.price;  // most recent high is lower (bearish)
+  const isHL = lastL.price > prevL.price;  // most recent low is higher (bullish)
+  const isLL = lastL.price < prevL.price;  // most recent low is lower (bearish)
+  const isHH = lastH.price > prevH.price;  // most recent high is higher (bullish)
 
+  // ── SHORT: LH is most recent pivot ──────────────────────────────────
   if (isLH && lastH.barTs > lastL.barTs) {
-    const isLL  = lastL.price < prevL.price;
     const lhAge = lastHAge;
-    const llAge = lastLAge;
+    const prevLAge = lastLAge;
 
-    if (isLL && lhAge <= PIVOT_FRESH_BARS && llAge <= STRUCT_BARS_15M) {
-      // CHoCH guard: bounce from LL to LH broke prior pivot high → ambiguous → no SHORT
-      const highsBeforeLL = ph15.filter(p => p.barTs < lastL.barTs);
-      const prevHHprice   = highsBeforeLL.length > 0
-        ? Math.max(...highsBeforeLL.map(p => p.price))
-        : prevH.price;
-      const barsInBounce  = bars15m.filter(b => b.t > lastL.barTs && b.t < lastH.barTs);
-      const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
-      if (chochHappened) return null;
-
-      // Minimum bounce: LL→LH must span ≥ 2×slPct (filters ranging micro-patterns)
+    if (lhAge <= PIVOT_FRESH_BARS && prevLAge <= STRUCT_BARS_15M) {
       const bouncePct = (lastH.price - lastL.price) / lastL.price;
       if (bouncePct >= slPct * 2) {
-        return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
+        if (isLL) {
+          // CHoCH guard: bounce from LL to LH broke prior pivot high → ambiguous → skip
+          const highsBeforeLL = ph15.filter(p => p.barTs < lastL.barTs);
+          const prevHHprice   = highsBeforeLL.length > 0
+            ? Math.max(...highsBeforeLL.map(p => p.price))
+            : prevH.price;
+          const barsInBounce  = bars15m.filter(b => b.t > lastL.barTs && b.t < lastH.barTs);
+          const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
+          if (!chochHappened) {
+            return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
+          }
+        } else if (isHL) {
+          // HL → LH: uptrend turning bearish (CHoCH short)
+          return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'HL→LH' };
+        }
       }
     }
   }
 
-  // ── LONG: HH → HL ────────────────────────────────────────────────
-  // HL = most recent pivot LOW is higher than the one before it
-  // HH = most recent pivot HIGH (before the HL) is higher than the one before it
-  const isHL = lastL.price > prevL.price;
-
+  // ── LONG: HL is most recent pivot ───────────────────────────────────
   if (isHL && lastL.barTs > lastH.barTs) {
-    const isHH  = lastH.price > prevH.price;
     const hlAge = lastLAge;
-    const hhAge = lastHAge;
+    const prevHAge = lastHAge;
 
-    if (isHH && hlAge <= PIVOT_FRESH_BARS && hhAge <= STRUCT_BARS_15M) {
-      // Minimum pullback: HH→HL must span ≥ 2×slPct (filters ranging micro-patterns)
+    if (hlAge <= PIVOT_FRESH_BARS && prevHAge <= STRUCT_BARS_15M) {
       const pullbackPct = (lastH.price - lastL.price) / lastH.price;
       if (pullbackPct >= slPct * 2) {
-        return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
+        if (isHH) {
+          // HH → HL: uptrend continuation
+          return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
+        } else if (isLH) {
+          // LH → HL: downtrend turning bullish (CHoCH long)
+          return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'LH→HL' };
+        }
       }
     }
   }
