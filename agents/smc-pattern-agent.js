@@ -52,7 +52,17 @@ const UNBLOCK_FLOOR    = 0.50;      // ≥ 50% WR → unblock
 // When bullish BMS is active → no SHORTs.  When bearish BMS → no LONGs.
 
 // Symbols to scan — pulled from TRADING_CONFIG (XRP excluded there)
-const SYMBOLS = Object.keys(TRADING_CONFIG);
+const PROFESSIONAL_SHORT_FILTER = process.env.PROFESSIONAL_SHORT_FILTER !== '0';
+const PROFESSIONAL_SHORT_SYMBOLS = new Set(
+  (process.env.PROFESSIONAL_SHORT_SYMBOLS || 'BTCUSDT,ETHUSDT')
+    .split(',')
+    .map(s => s.trim().toUpperCase())
+    .filter(Boolean)
+);
+const PROFESSIONAL_MAX_15M_AGE_MS = (parseInt(process.env.PROFESSIONAL_MAX_15M_AGE_MIN || '60', 10) || 60) * 60_000;
+const SYMBOLS = PROFESSIONAL_SHORT_FILTER
+  ? Object.keys(TRADING_CONFIG).filter(sym => PROFESSIONAL_SHORT_SYMBOLS.has(sym))
+  : Object.keys(TRADING_CONFIG);
 
 // ── Interval conversion (minutes → Bybit format) ─────────────
 // TRADING_CONFIG uses numeric minutes: '15', '30', '60', '240', '1', etc.
@@ -105,6 +115,25 @@ function formatSignal(raw) {
     signal: raw.signal,
     ts:     raw.ts,
   };
+}
+
+function professionalShortFilter(raw, now = Date.now()) {
+  if (!PROFESSIONAL_SHORT_FILTER) return { pass: true, reason: 'disabled' };
+  if (!PROFESSIONAL_SHORT_SYMBOLS.has(raw.symbol)) {
+    return { pass: false, reason: `${raw.symbol} not in professional short whitelist` };
+  }
+  if (raw.dir !== 'SHORT') {
+    return { pass: false, reason: `${raw.symbol} ${raw.dir} blocked: professional mode is SHORT-only` };
+  }
+  const pattern15 = String(raw.pattern15 || raw.pattern || '');
+  if (!(pattern15.includes('LL') && pattern15.includes('LH'))) {
+    return { pass: false, reason: `${raw.symbol} pattern ${raw.pattern15 || raw.pattern} blocked: need 15m LL→LH` };
+  }
+  if (!raw.pivot15Ts || now - raw.pivot15Ts > PROFESSIONAL_MAX_15M_AGE_MS) {
+    const ageMin = raw.pivot15Ts ? Math.round((now - raw.pivot15Ts) / 60_000) : 'unknown';
+    return { pass: false, reason: `${raw.symbol} 15m structure too old (${ageMin}m)` };
+  }
+  return { pass: true, reason: 'professional short setup' };
 }
 
 // ── Agent ────────────────────────────────────────────────────
@@ -275,6 +304,13 @@ class SMCPatternAgent extends BaseAgent {
         // ── Core signal: 15m LL→LH (SHORT) or 15m HH→HL (LONG) + 1m confirmation ──
         const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns, bLog.scan);
         if (!raw) continue;
+
+        const proGate = professionalShortFilter(raw, now);
+        if (!proGate.pass) {
+          bLog.scan(`[SMC-PAT] PROFESSIONAL FILTER: ${proGate.reason}`);
+          this.addActivity('skip', proGate.reason);
+          continue;
+        }
 
         bLog.scan(`[SMC-PAT] ${sym} SIGNAL: key=${raw.keyLevel?.toFixed(4)} 1m_piv=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
 
@@ -473,6 +509,21 @@ class SMCPatternAgent extends BaseAgent {
           const riskResult = await riskAgent.run({ signals: btcFiltered, openPositions });
           approved = riskResult?.approved || btcFiltered;
           bLog.scan(`[SMC-PAT] RiskAgent: ${approved.length}/${btcFiltered.length} approved`);
+        }
+
+        const marketDecisionAgent = context.coordinator.marketDecisionAgent;
+        if (approved.length && marketDecisionAgent && !marketDecisionAgent.paused) {
+          const decisionResult = await marketDecisionAgent.run({
+            signals: approved,
+            sentimentAgent: context.coordinator.sentimentAgent,
+          });
+          approved = decisionResult?.approved || [];
+          const rejected = decisionResult?.rejected || [];
+          if (rejected.length) {
+            bLog.scan(`[SMC-PAT] MarketDecisionAgent rejected ${rejected.length}: ` +
+              rejected.map(r => `${r.signal.symbol} ${r.reasons?.[0] || 'decision block'}`).join(' | '));
+          }
+          bLog.scan(`[SMC-PAT] MarketDecisionAgent: ${approved.length}/${riskAgent && !riskAgent.paused ? 'risk-approved' : btcFiltered.length} approved`);
         }
 
         // Cross-agent dedup: skip any symbol:direction that SMCProAgent (or any

@@ -27,6 +27,7 @@ const { PolymarketAgent } = require('./polymarket-agent');
 const { SMCProAgent }     = require('./smc-pro-agent');
 const { PolyBTCAgent }    = require('./poly-btc-agent');
 const { SMCPatternAgent } = require('./smc-pattern-agent');
+const { MarketDecisionAgent } = require('./market-decision-agent');
 const { getAIChartLearner } = require('./ai-chart-learner');
 const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
@@ -65,6 +66,7 @@ class AgentCoordinator extends BaseAgent {
     this.smcProAgent     = new SMCProAgent(options);
     this.polyBtcAgent    = new PolyBTCAgent(options);
     this.smcPatternAgent  = new SMCPatternAgent(options);
+    this.marketDecisionAgent = new MarketDecisionAgent(options);
     this.aiChartLearner   = getAIChartLearner(options);
 
     // Agent registry — order matters for display
@@ -83,6 +85,7 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('smc-pro',     this.smcProAgent);
     this._agents.set('poly-btc',    this.polyBtcAgent);
     this._agents.set('smc-pattern',  this.smcPatternAgent);
+    this._agents.set('market-decision', this.marketDecisionAgent);
     this._agents.set('ai-learner',   this.aiChartLearner);
 
     // Wire up inter-agent events
@@ -315,7 +318,7 @@ class AgentCoordinator extends BaseAgent {
     this.addActivity('info', 'CEO online — always-on mode activated');
 
     // Keep all core agents at their stations permanently
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
     for (const a of coreAgents) {
       if (!a.paused) {
         a.managedByCoordinator = true;
@@ -742,7 +745,7 @@ class AgentCoordinator extends BaseAgent {
     }
 
     // All agents stay permanently managed by CEO loop — just update their tasks
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
     for (const a of coreAgents) {
       if (!a.paused && a.state !== 'jailed') {
         a.managedByCoordinator = true;
@@ -973,6 +976,23 @@ class AgentCoordinator extends BaseAgent {
         approvedSignals = approvedSignals.filter(s => !s._consensusRejected);
         if (preCount > approvedSignals.length) {
           this.addActivity('info', `Consensus filtered: ${preCount} → ${approvedSignals.length} signals`);
+        }
+      }
+
+      // ── Step 4.5: MarketDecisionAgent final gate ──
+      if (approvedSignals.length > 0 && !this.marketDecisionAgent.paused) {
+        this.currentTask = { description: 'Step 5/7: MarketDecisionAgent checking structure/news/memory', startedAt: Date.now() };
+        const decisionResult = await this.marketDecisionAgent.run({
+          signals: approvedSignals,
+          sentimentAgent: this.sentimentAgent,
+        });
+        approvedSignals = decisionResult?.approved || [];
+        if (decisionResult?.rejected?.length) {
+          this.addActivity('warning', `MarketDecision rejected ${decisionResult.rejected.length}: ` +
+            decisionResult.rejected.map(r => `${r.signal.symbol.replace('USDT','')}(${r.reasons?.[0] || 'blocked'})`).join(', '));
+        }
+        if (approvedSignals.length > 0) {
+          this.addActivity('success', `MarketDecision approved ${approvedSignals.length}: ${approvedSignals.map(s => `${s.symbol.replace('USDT','')} ${s.direction}`).join(', ')}`);
         }
       }
 

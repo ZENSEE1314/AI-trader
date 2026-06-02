@@ -161,6 +161,9 @@ class TraderAgent extends BaseAgent {
 
       for (const pick of signals) {
         this.logTrade(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setupName}`);
+        if (pick.marketDecision) {
+          this.logTrade(`MarketDecision: ${pick.marketDecision.summary || 'approved'} | size=${(pick.sizeMod || 1).toFixed(2)}x ${pick.sizeReason || ''}`);
+        }
 
         // Check global token ban
         if (await isTokenBanned(pick.symbol || pick.sym)) {

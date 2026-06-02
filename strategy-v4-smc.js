@@ -63,19 +63,17 @@ const DELTA_1D   =   2;  // bars fetched each subsequent daily cycle
 // Leverage raised to 125x (user approved). SL recalculated for 20% max capital loss:
 //   SL price % = max_capital_loss / leverage = 20% / 125 = 0.16%
 // Previously 0.40% SL at 75x = 30% loss; at 125x that becomes 50% loss — too large.
-const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
 
 const SYMBOL_LEVERAGE = {
-  BTCUSDT: 125,  // 20% capital loss at 0.16% SL
-  ETHUSDT: 125,  // 20% capital loss at 0.16% SL
-  SOLUSDT: 125,  // 20% capital loss at 0.16% SL
+  BTCUSDT: 75,
+  ETHUSDT: 75,
 };
 
 // SL price distance: 0.12% = 15% capital loss at 125x (user-requested max).
 const SYMBOL_SL_PCT = {
-  BTCUSDT: 0.0012,  // 0.12% → 15% capital loss at 125x
-  ETHUSDT: 0.0012,  // 0.12% → 15% capital loss at 125x
-  SOLUSDT: 0.0012,  // 0.12% → 15% capital loss at 125x
+  BTCUSDT: 0.50 / 75,
+  ETHUSDT: 0.50 / 75,
 };
 
 // ── Profit-lock — replaces fixed TP ────────────────────────────

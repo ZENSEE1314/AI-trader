@@ -87,6 +87,7 @@ const PRIVATE_CHATS  = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 // ── CONFIG (defaults — AI may override some via getOptimalParams) ─
 const BTC_ETH_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT']);
 const HIGH_PRICE_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']);
+const PROFESSIONAL_STRATEGY_ONLY = process.env.PROFESSIONAL_STRATEGY_ONLY !== '0';
 
 // V4 strategy constants — loaded from v4_config DB table on startup (admin-editable).
 // Falls back to these safe defaults when the DB row is missing.
@@ -107,9 +108,8 @@ function injectTVSignal(signal) {
 }
 
 let TOKEN_LEVERAGE = {
-  BTCUSDT: 125, // 125x — higher return per TP hit
-  ETHUSDT: 125,
-  SOLUSDT: 125,
+  BTCUSDT: 75,
+  ETHUSDT: 75,
 };
 
 async function loadV4Config() {
@@ -120,10 +120,8 @@ async function loadV4Config() {
 
     // NOTE: capital_pct intentionally NOT loaded from DB — hardcoded at 10% in all scenarios.
     // if (cfg.capital_pct) CAPITAL_PER_TRADE = parseFloat(cfg.capital_pct) / 100;
-    if (cfg.lev_BTCUSDT) TOKEN_LEVERAGE.BTCUSDT = parseInt(cfg.lev_BTCUSDT);
-    if (cfg.lev_ETHUSDT) TOKEN_LEVERAGE.ETHUSDT = parseInt(cfg.lev_ETHUSDT);
-    if (cfg.lev_BNBUSDT) TOKEN_LEVERAGE.BNBUSDT = parseInt(cfg.lev_BNBUSDT);
-    if (cfg.lev_SOLUSDT) TOKEN_LEVERAGE.SOLUSDT = parseInt(cfg.lev_SOLUSDT);
+    TOKEN_LEVERAGE.BTCUSDT = 75;
+    TOKEN_LEVERAGE.ETHUSDT = 75;
 
     // NOTE: per-symbol capital overrides intentionally disabled — all tokens use hardcoded 10%.
     // for (const sym of ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'ADAUSDT']) {
@@ -162,7 +160,7 @@ async function loadV4Config() {
     const t50  = dynamicTiers['50'];
     const capEth = SYMBOL_CAPITAL['ETHUSDT'] ? `ETH=${(SYMBOL_CAPITAL['ETHUSDT']*100).toFixed(0)}%` : '';
     const capOverrides = Object.keys(SYMBOL_CAPITAL).map(s => `${s.replace('USDT','')}=${(SYMBOL_CAPITAL[s]*100).toFixed(0)}%`).join(' ');
-    console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}%${capOverrides ? ` (overrides: ${capOverrides})` : ''} | leverage: BTC=${TOKEN_LEVERAGE.BTCUSDT}x ETH=${TOKEN_LEVERAGE.ETHUSDT}x BNB=${TOKEN_LEVERAGE.BNBUSDT}x SOL=${TOKEN_LEVERAGE.SOLUSDT}x`);
+    console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}%${capOverrides ? ` (overrides: ${capOverrides})` : ''} | leverage: BTC=${TOKEN_LEVERAGE.BTCUSDT}x ETH=${TOKEN_LEVERAGE.ETHUSDT}x`);
     console.log(`[V4 Config] TSL tiers — 100x: T1=${t100[0].trigger*100}%→${t100[0].lock*100}% T2=${t100[1].trigger*100}%→${t100[1].lock*100}% T3=${t100[2].trigger*100}%→${t100[2].lock*100}% step=${g('tsl_100x_step',10)}%`);
     console.log(`[V4 Config] TSL tiers —  75x: T1=${t75[0].trigger*100}%→${t75[0].lock*100}%  T2=${t75[1].trigger*100}%→${t75[1].lock*100}%  T3=${t75[2].trigger*100}%→${t75[2].lock*100}%  step=${g('tsl_75x_step',10)}%`);
     console.log(`[V4 Config] TSL tiers —  50x: T1=${t50[0].trigger*100}%→${t50[0].lock*100}%  T2=${t50[1].trigger*100}%→${t50[1].lock*100}%  T3=${t50[2].trigger*100}%→${t50[2].lock*100}%  step=${g('tsl_50x_step',11)}%`);
@@ -207,8 +205,8 @@ const _signalLossTracker = new Map();
 //   100x: price SL = 0.20/100 = 0.20% price move → 20% capital loss
 //    75x: price SL = 0.15/75  = 0.20% price move → 15% capital loss
 //    50x: price SL = 0.15/50  = 0.30% price move → 15% capital loss
-const SL_PCT = 0.15;   // 15% max capital loss at any leverage
-const TP_PCT = 0.45;   // reference only — trailing SL handles the actual exit
+const SL_PCT = 0.50;   // 50% max trade-margin loss at any leverage
+const TP_PCT = 0.75;   // 75% trade-margin target
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
 // Admin activates a backtest version via the UI → params saved to settings.
@@ -1389,10 +1387,7 @@ async function main() {
     }
 
     // One-time: enforce backtest-tuned leverage in token_leverage table.
-    //   BTC/ETH      → 100x  (proven WR ≥ 55% on the momentum backtest)
-    //   SOL/BNB/XRP  →  50x  (100x makes the v3 initial SL 0.2 % price,
-    //                          which is inside 1m noise; 50x widens to
-    //                          0.4 % and materially improves WR/PF)
+    //   BTC/ETH -> 75x for the professional LL->LH short setup.
     if (!runCycle._leverageFixDone) {
       runCycle._leverageFixDone = true;
       try {
@@ -1404,7 +1399,7 @@ async function main() {
             [sym, lev]
           );
         }
-        bLog.system('[LEVERAGE-FIX] BTC/ETH=100x, SOL/BNB/XRP=50x written to token_leverage');
+        bLog.system('[LEVERAGE-FIX] BTC/ETH=75x written to token_leverage');
       } catch (e) {
         bLog.error(`[LEVERAGE-FIX] Failed to update token_leverage: ${e.message}`);
       }
@@ -2106,6 +2101,19 @@ async function executeForAllUsers(pick) {
 
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
+        const patternText = `${pick.pattern15 || ''} ${pick.setupName || ''} ${pick.smcContext?.pattern || ''}`;
+        const isProfessionalBacktestSetup =
+          !isLong &&
+          (symbol === 'BTCUSDT' || symbol === 'ETHUSDT') &&
+          patternText.includes('LL') &&
+          patternText.includes('LH');
+        if (PROFESSIONAL_STRATEGY_ONLY && !isProfessionalBacktestSetup) {
+          userLog.trade(
+            `User ${key.email}: blocked by professional mode — only BTC/ETH SHORT 15m LL->LH is allowed ` +
+            `(got ${symbol} ${pick.direction} ${patternText.trim() || 'unknown setup'})`
+          );
+          return;
+        }
 
         // ── Read ALL user settings from DB ──
         const userLev = await getTokenLeverage(symbol, key.id, price);
@@ -2141,8 +2149,12 @@ async function executeForAllUsers(pick) {
         const rawGlobalTrail = activeVer?.trailStep != null ? parseFloat(activeVer.trailStep) : null;
         const globalTrail    = rawGlobalTrail != null ? rawGlobalTrail * 100 : null;
 
-        const dirSl  = activeVer?.[dirSlKey]  != null && parseFloat(activeVer[dirSlKey])  > 0 ? parseFloat(activeVer[dirSlKey])  : globalSl;
-        const dirTp  = activeVer?.[dirTpKey]  != null && parseFloat(activeVer[dirTpKey])  > 0 ? parseFloat(activeVer[dirTpKey])  : globalTp;
+        let dirSl  = activeVer?.[dirSlKey]  != null && parseFloat(activeVer[dirSlKey])  > 0 ? parseFloat(activeVer[dirSlKey])  : globalSl;
+        let dirTp  = activeVer?.[dirTpKey]  != null && parseFloat(activeVer[dirTpKey])  > 0 ? parseFloat(activeVer[dirTpKey])  : globalTp;
+        if (isProfessionalBacktestSetup) {
+          dirSl = 0.50 / userLev;
+          dirTp = 0.75 / userLev;
+        }
         const rawDirTrail = activeVer?.[dirTrailKey] != null && parseFloat(activeVer[dirTrailKey]) > 0
           ? parseFloat(activeVer[dirTrailKey]) * 100  // price fraction → capital %
           : globalTrail;
@@ -2217,7 +2229,9 @@ async function executeForAllUsers(pick) {
           // Other strategies: fixed 30% margin SL, no hard TP (trailing handles exit)
           const isRangeBounce = pick.setup === 'RANGE_BOUNCE';
           const slPrice = (isRangeBounce && pick.sl) ? pick.sl : initialSlPrice;
-          const bnTpPrice = (isRangeBounce && pick.tp1) ? pick.tp1 : null;
+          const bnTpPrice = isProfessionalBacktestSetup
+            ? userTpPrice
+            : (isRangeBounce && pick.tp1) ? pick.tp1 : null;
 
           try { await userClient.setLeverage({ symbol, leverage: userLev }); } catch (_) {}
           try { await userClient.setMarginType({ symbol, marginType: 'ISOLATED' }); } catch (e) { if (!e.message?.includes('No need')) throw e; }
@@ -2449,7 +2463,9 @@ async function executeForAllUsers(pick) {
           // TP: Range Bounce uses hard TP at opposite wall, Scenario A at +3.5%, others none
           const bxEntryRef = price;
           let bxTpPrice = null;
-          if ((isScenarioA || isRangeBounce) && pick.tp1) {
+          if (isProfessionalBacktestSetup) {
+            bxTpPrice = parseFloat(parseFloat(userTpPrice).toFixed(8));
+          } else if ((isScenarioA || isRangeBounce) && pick.tp1) {
             bxTpPrice = parseFloat(parseFloat(pick.tp1).toFixed(8));
           }
 
@@ -2462,7 +2478,7 @@ async function executeForAllUsers(pick) {
             qty: String(qty), orderType: bxOrderType, tradeSide: 'OPEN',
           };
           if (bxLimitPrice)                               orderPayload.price = String(bxLimitPrice);
-          if (bxTpPrice && (isScenarioA || isRangeBounce)) { orderPayload.tpPrice = String(bxTpPrice); orderPayload.tpOrderType = 'MARKET'; orderPayload.tpStopType = 'MARK_PRICE'; }
+          if (bxTpPrice && (isScenarioA || isRangeBounce || isProfessionalBacktestSetup)) { orderPayload.tpPrice = String(bxTpPrice); orderPayload.tpOrderType = 'MARKET'; orderPayload.tpStopType = 'MARK_PRICE'; }
 
           // Paper trading mode — simulate without real API calls.
           let order;
@@ -2525,7 +2541,7 @@ async function executeForAllUsers(pick) {
               const tpNote = bxTpPrice ? ` TP=$${bxTpPrice} (hard close)` : '';
               userLog.trade(`Bitunix position confirmed: ${posId} entry=$${actualEntry} — setting SL=$${slFmtActual}${tpNote}...`);
               const tpSLPayload = { symbol, positionId: posId, slPrice: slFmtActual };
-              if (bxTpPrice && (isScenarioA || isRangeBounce)) tpSLPayload.tpPrice = String(bxTpPrice);
+              if (bxTpPrice && (isScenarioA || isRangeBounce || isProfessionalBacktestSetup)) tpSLPayload.tpPrice = String(bxTpPrice);
               // Retry SL placement up to 3 times. Silent first-attempt
               // failures (rate limit, position not yet visible on exchange,
               // transient API hiccups) caused some users to end up with a
@@ -2549,7 +2565,7 @@ async function executeForAllUsers(pick) {
                 userLog.error(`Bitunix SL FAILED after 3 attempts: ${slLastErr} — SET MANUALLY`);
                 await notify(`🚨 *Bitunix ${symbol} ${pick.direction}*\nSL FAILED 3× — *no SL on exchange*\nUser: ${key.email}\nEntry: $${actualEntry}\nIntended SL: $${slFmtActual}\n\`${slLastErr.substring(0,150)}\`\nSet SL on Bitunix NOW.`);
               }
-            } else if ((isScenarioA || isRangeBounce) && bxTpPrice) {
+            } else if ((isScenarioA || isRangeBounce || isProfessionalBacktestSetup) && bxTpPrice) {
               userLog.trade(`Bitunix: no SL — setting TP=$${bxTpPrice} only...`);
               try {
                 await userClient.placePositionTpSl({ symbol, positionId: posId, tpPrice: String(bxTpPrice), tpOrderType: 'MARKET', tpStopType: 'MARK_PRICE' });
@@ -2563,7 +2579,7 @@ async function executeForAllUsers(pick) {
             //          and tp2 in tp2_price (runner target after SL moves to TP1).
             // All other setups trail freely — store 0.
             const isSmcPro = (pick.setupName || pick.setup || '').includes('SMC');
-            const tpRef = (isScenarioA || isRangeBounce) && bxTpPrice
+            const tpRef = (isScenarioA || isRangeBounce || isProfessionalBacktestSetup) && bxTpPrice
               ? bxTpPrice
               : (isSmcPro && pick.tp1 ? parseFloat(parseFloat(pick.tp1).toFixed(8)) : 0);
             const tp2Ref = isSmcPro && pick.tp2 ? parseFloat(parseFloat(pick.tp2).toFixed(8)) : 0;

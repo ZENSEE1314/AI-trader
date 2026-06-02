@@ -1090,17 +1090,8 @@ const _chochRedirectMap = new Map();
 // slPct = stop-loss % from pattern level (optimized per token)
 // label = human-readable TF label
 const TRADING_CONFIG = {
-  BTCUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'BTC'  },
-  ETHUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'ETH'  },
-  SOLUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'SOL'  },
-  BNBUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'BNB'  },
-  ADAUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'ADA'  },
-  DOTUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'DOT'  },
-  LINKUSDT: { iv:'15',  slPct:0.005, label:'15M', name:'LINK' },
-  // AVAXUSDT removed — noisy price action, consistent -0.56R avg in backtests across all regimes
-  LTCUSDT:  { iv:'15',  slPct:0.005, label:'15M', name:'LTC'  },
-  // XRP removed — 49% WR after fees, not profitable
-  // All tokens: 15M primary + 1M LTF confirmation (follows BTC 15M+1M standard)
+  BTCUSDT:  { iv:'15',  slPct:0.50 / 75, label:'15M', name:'BTC'  },
+  ETHUSDT:  { iv:'15',  slPct:0.50 / 75, label:'15M', name:'ETH'  },
 };
 
 // ── TP / lock constants (same for all tokens) ────────────────────
@@ -2452,6 +2443,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
     trend,
     pivot15m: pivot15.price,
+    pivot15Ts: pivot15.barTs,
     pivot1m:  pivot1m.price,
     ltfUsed:  '1m',
     ts:       now,
