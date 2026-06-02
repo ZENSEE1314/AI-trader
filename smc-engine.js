@@ -1084,6 +1084,7 @@ async function analyzeSMC(symbol, log = console.log) {
 // says the opposite, we block X and wait for the opposite 15m structure to confirm.
 // Key: symbol  Value: { redirectDir, blockedDir, blockedAt, expiresAt }
 const _chochRedirectMap = new Map();
+const _bounceWatchMap = new Map();
 
 // ── Token trading config ─────────────────────────────────────────
 // iv = entry timeframe interval (Bybit format)
@@ -2002,6 +2003,10 @@ const STRUCT_BARS_15M  = 60;        // structure context: HH (for LONG) or LL (f
 const PIVOT_FRESH_BARS = 16;        // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤16 bars = 4 h old
 const WINDOW_MS        = 2 * 60 * 60_000; // 1m pivot must form within 2 h of the 15m pivot bar open
 const ENTRY_TOL        = 0.005;     // MUST equal slPct — entry must be within slPct% of the 1m HL/LH.
+const BOUNCE_WATCH_ENABLED = process.env.BOUNCE_WATCH_ENABLED !== '0';
+const BOUNCE_WATCH_EXPIRE_MS = (parseInt(process.env.BOUNCE_WATCH_EXPIRE_MIN || '90', 10) || 90) * 60_000;
+const BOUNCE_WATCH_MAX_LH_AGE = parseInt(process.env.BOUNCE_WATCH_MAX_LH_AGE || '10', 10);
+const BOUNCE_WATCH_MIN_RETRACE = parseFloat(process.env.BOUNCE_WATCH_MIN_RETRACE || '0.45');
                                     // If ENTRY_TOL > slPct the SL would float above the structural HL when
                                     // entering at max drift, blowing out capital by 2× slPct × leverage.
 
@@ -2050,6 +2055,100 @@ function _toPivotsForCHoCH(bars) {
   for (const p of ph) out.push({ type: 'HIGH', price: p.price, ts: p.barTs, idx: p.idx });
   for (const p of pl) out.push({ type: 'LOW',  price: p.price, ts: p.barTs, idx: p.idx });
   return out.sort((a, b) => a.idx - b.idx);
+}
+
+function _updateBullishBounceWatch(sym, bars1m, ph1, pl1, now, dbg = null) {
+  const D = (msg) => dbg && dbg(msg);
+  if (!BOUNCE_WATCH_ENABLED || ph1.length < 2 || pl1.length < 2 || !bars1m?.length) return null;
+
+  let lastLow = null;
+  let prevLow = null;
+  for (let i = pl1.length - 1; i >= 1; i--) {
+    if (pl1[i].price < pl1[i - 1].price) {
+      lastLow = pl1[i];
+      prevLow = pl1[i - 1];
+      break;
+    }
+  }
+  if (!lastLow || !prevLow) return _bounceWatchMap.get(sym) || null;
+
+  let brokenHigh = null;
+  let chochBar = null;
+
+  // TradingView's CHoCH after a LL is usually the close through the small bounce
+  // high formed after the LL. Fall back to the prior high only when that local
+  // post-LL high has not printed yet.
+  const highsAfterLL = ph1.filter(p => p.barTs > lastLow.barTs);
+  for (const h of highsAfterLL) {
+    const breaker = bars1m.find(b => b.t > h.barTs && b.c > h.price);
+    if (breaker) {
+      brokenHigh = h;
+      chochBar = breaker;
+      break;
+    }
+  }
+
+  if (!brokenHigh) {
+    const highsBeforeLL = ph1.filter(p => p.barTs < lastLow.barTs);
+    brokenHigh = highsBeforeLL[highsBeforeLL.length - 1];
+    if (!brokenHigh) return _bounceWatchMap.get(sym) || null;
+    chochBar = bars1m.find(b => b.t > lastLow.barTs && b.c > brokenHigh.price);
+  }
+  if (!chochBar) return _bounceWatchMap.get(sym) || null;
+
+  const existing = _bounceWatchMap.get(sym);
+  if (!existing || existing.llTs !== lastLow.barTs || existing.chochTs !== chochBar.t) {
+    const watch = {
+      llPrice: lastLow.price,
+      llTs: lastLow.barTs,
+      brokenHigh: brokenHigh.price,
+      chochTs: chochBar.t,
+      expiresAt: now + BOUNCE_WATCH_EXPIRE_MS,
+    };
+    _bounceWatchMap.set(sym, watch);
+    D(`BounceWatch ON - 1m LL ${lastLow.price.toFixed(2)} then bullish CHoCH above ${brokenHigh.price.toFixed(2)}; waiting for LH/rejection short`);
+    return watch;
+  }
+
+  return existing;
+}
+
+function _bounceWatchShortSetup(sym, bars1m, ph1, now, dbg = null) {
+  const D = (msg) => dbg && dbg(msg);
+  if (!BOUNCE_WATCH_ENABLED) return null;
+  const watch = _bounceWatchMap.get(sym);
+  if (!watch) return null;
+  if (now > watch.expiresAt) {
+    _bounceWatchMap.delete(sym);
+    D('BounceWatch expired - no LH rejection after bullish CHoCH bounce');
+    return null;
+  }
+
+  const highsAfterChoch = ph1.filter(p => p.barTs > watch.chochTs);
+  if (highsAfterChoch.length < 1 || ph1.length < 2) return null;
+
+  const pivot = highsAfterChoch[highsAfterChoch.length - 1];
+  const prevHigh = ph1.filter(p => p.barTs < pivot.barTs).slice(-1)[0];
+  if (!prevHigh || pivot.price >= prevHigh.price) return null;
+
+  const barsSincePivot = bars1m.length - 1 - pivot.idx;
+  if (barsSincePivot > BOUNCE_WATCH_MAX_LH_AGE) return null;
+
+  const bounceRange = Math.max(1e-9, pivot.price - watch.llPrice);
+  const retrace = (pivot.price - watch.brokenHigh) / bounceRange;
+  if (retrace < BOUNCE_WATCH_MIN_RETRACE) {
+    D(`BounceWatch wait - LH ${pivot.price.toFixed(2)} retrace ${retrace.toFixed(2)} < ${BOUNCE_WATCH_MIN_RETRACE}`);
+    return null;
+  }
+
+  const cur = bars1m[bars1m.length - 1];
+  const rejected = cur.c < pivot.price && cur.h <= pivot.price * (1 + ENTRY_TOL);
+  if (!rejected) {
+    D(`BounceWatch wait - price has not rejected LH ${pivot.price.toFixed(2)}`);
+    return null;
+  }
+
+  return { pivot, watch, label: 'LL->LH_BOUNCE', reason: `1m LL+CHoCH bounce rejected at LH ${pivot.price.toFixed(2)}` };
 }
 
 // ── _detect15mStructure ───────────────────────────────────────────────
@@ -2249,7 +2348,9 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   //   If 1m CHoCH is BULLISH at that moment → SHORT blocked, redirect=LONG stored.
   //   Next scan sees HH or HL on 15m → redirect resolves → LONG entry (via 1m HL below).
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
+  const { ph: ph1, pl: pl1 } = _allPivots(bars1m);
   const total1m = bars1m.length;
+  _updateBullishBounceWatch(sym, bars1m, ph1, pl1, now, L);
 
   let dir, pivot15, label;
 
@@ -2272,9 +2373,18 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
         L(`Step1 REDIRECT ALLOW ✓ — ${single.label} on 15m resolves redirect to ${activeRedirect.redirectDir}`);
         ({ dir, pivot15, label } = single);
       } else {
-        const need = activeRedirect.redirectDir === 'SHORT' ? 'LH' : 'HL';
-        L(`Step1 REDIRECT BLOCK — waiting for 15m ${need} to ${activeRedirect.redirectDir}`);
-        return null;
+        const bounce = _bounceWatchShortSetup(sym, bars1m, ph1, now, L);
+        if (activeRedirect.redirectDir === 'LONG' && bounce) {
+          _chochRedirectMap.delete(sym);
+          dir = 'SHORT';
+          pivot15 = bounce.pivot;
+          label = bounce.label;
+          L(`Step1 BOUNCE-WATCH OVERRIDE ✓ — bullish CHoCH bounce failed into LH; ${bounce.reason}`);
+        } else {
+          const need = activeRedirect.redirectDir === 'SHORT' ? 'LH' : 'HL';
+          L(`Step1 REDIRECT BLOCK — waiting for 15m ${need} to ${activeRedirect.redirectDir}`);
+          return null;
+        }
       }
     }
   } else {
@@ -2285,10 +2395,19 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
       const lastL = pl15.length ? pl15[pl15.length - 1] : null;
       const hAge  = lastH ? (bars15m.length - 1) - lastH.idx : -1;
       const lAge  = lastL ? (bars15m.length - 1) - lastL.idx : -1;
-      L(`Step1 FAIL — no 15m structure. ph=${ph15.length}(age=${hAge}) pl=${pl15.length}(age=${lAge})`);
-      return null;
+      const bounce = _bounceWatchShortSetup(sym, bars1m, ph1, now, L);
+      if (bounce) {
+        dir = 'SHORT';
+        pivot15 = bounce.pivot;
+        label = bounce.label;
+        L(`Step1 BOUNCE-WATCH PASS ✓ — ${bounce.reason}`);
+      } else {
+        L(`Step1 FAIL — no 15m structure. ph=${ph15.length}(age=${hAge}) pl=${pl15.length}(age=${lAge})`);
+        return null;
+      }
+    } else {
+      ({ dir, pivot15, label } = st);
     }
-    ({ dir, pivot15, label } = st);
   }
 
   L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
@@ -2327,7 +2446,6 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   // Accept any confirmed 1m pivot in the right direction — HH and LH both anchor a SHORT;
   // HL and LL both anchor a LONG. Pick the highest high (SHORT) or lowest low (LONG)
   // within WINDOW_MS of the 15m pivot bar to get the best structural level.
-  const { ph: ph1, pl: pl1 } = _allPivots(bars1m);
   let pivot1m = null;
 
   if (dir === 'SHORT') {
