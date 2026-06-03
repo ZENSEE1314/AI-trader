@@ -28,6 +28,7 @@ const { SMCProAgent }     = require('./smc-pro-agent');
 const { PolyBTCAgent }    = require('./poly-btc-agent');
 const { SMCPatternAgent } = require('./smc-pattern-agent');
 const { MarketDecisionAgent } = require('./market-decision-agent');
+const { LiquidityAgent } = require('./liquidity-agent');
 const { getAIChartLearner } = require('./ai-chart-learner');
 const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
@@ -67,6 +68,7 @@ class AgentCoordinator extends BaseAgent {
     this.polyBtcAgent    = new PolyBTCAgent(options);
     this.smcPatternAgent  = new SMCPatternAgent(options);
     this.marketDecisionAgent = new MarketDecisionAgent(options);
+    this.liquidityAgent = new LiquidityAgent(options);
     this.aiChartLearner   = getAIChartLearner(options);
 
     // Agent registry — order matters for display
@@ -86,6 +88,7 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('poly-btc',    this.polyBtcAgent);
     this._agents.set('smc-pattern',  this.smcPatternAgent);
     this._agents.set('market-decision', this.marketDecisionAgent);
+    this._agents.set('liquidity', this.liquidityAgent);
     this._agents.set('ai-learner',   this.aiChartLearner);
 
     // Wire up inter-agent events
@@ -318,7 +321,7 @@ class AgentCoordinator extends BaseAgent {
     this.addActivity('info', 'CEO online — always-on mode activated');
 
     // Keep all core agents at their stations permanently
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.liquidityAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
     for (const a of coreAgents) {
       if (!a.paused) {
         a.managedByCoordinator = true;
@@ -745,7 +748,7 @@ class AgentCoordinator extends BaseAgent {
     }
 
     // All agents stay permanently managed by CEO loop — just update their tasks
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.liquidityAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
     for (const a of coreAgents) {
       if (!a.paused && a.state !== 'jailed') {
         a.managedByCoordinator = true;

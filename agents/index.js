@@ -20,6 +20,7 @@ const { PolymarketAgent } = require('./polymarket-agent');
 const { SMCProAgent } = require('./smc-pro-agent');
 const { PolyBTCAgent } = require('./poly-btc-agent');
 const { SMCPatternAgent } = require('./smc-pattern-agent');
+const { LiquidityAgent } = require('./liquidity-agent');
 const hermesBridge = require('../hermes-bridge');
 
 module.exports = {
@@ -43,5 +44,6 @@ module.exports = {
   SMCProAgent,
   PolyBTCAgent,
   SMCPatternAgent,
+  LiquidityAgent,
   hermesBridge,
 };

@@ -568,6 +568,18 @@ class SMCPatternAgent extends BaseAgent {
           bLog.scan(`[SMC-PAT] MarketDecisionAgent: ${approved.length}/${riskAgent && !riskAgent.paused ? 'risk-approved' : btcFiltered.length} approved`);
         }
 
+        const liquidityAgent = context.coordinator.liquidityAgent;
+        if (approved.length && liquidityAgent && !liquidityAgent.paused) {
+          const liqResult = await liquidityAgent.run({ signals: approved });
+          approved = liqResult?.approved || [];
+          const rejected = liqResult?.rejected || [];
+          if (rejected.length) {
+            bLog.scan(`[SMC-PAT] LiquidityAgent rejected ${rejected.length}: ` +
+              rejected.map(r => `${r.signal.symbol} ${r.reasons?.[0] || 'liquidity block'}`).join(' | '));
+          }
+          bLog.scan(`[SMC-PAT] LiquidityAgent: ${approved.length} approved after EQH/EQL map`);
+        }
+
         // Cross-agent dedup: skip any symbol:direction that SMCProAgent (or any
         // agent) already routed within the shared cooldown window.
         const lock   = context.coordinator._sharedSignalLock;
