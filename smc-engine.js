@@ -2416,9 +2416,10 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   // CHoCH flip signals bypass the 4H filter — the CHoCH itself IS the trend
   // reversal evidence. Blocking a CHoCH↑ LONG because "4H is DOWN" defeats the purpose.
   const isChochFlip = label === 'LL→CHoCH↑' || label === 'HH→CHoCH↓';
+  const isTrendStructure = (label.includes('LL') && label.includes('LH')) || (label.includes('HH') && label.includes('HL'));
   let trend4h = 'NEUTRAL';
   try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}
-  if (!isChochFlip) {
+  if (!isChochFlip && !isTrendStructure) {
     if (dir === 'LONG'  && trend4h === 'DOWN') { L(`Step1b FAIL — 4H DOWN, rejecting LONG`);  return null; }
     if (dir === 'SHORT' && trend4h === 'UP')   { L(`Step1b FAIL — 4H UP, rejecting SHORT`);   return null; }
 
@@ -2430,11 +2431,11 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   // Below VWAP = sell-side pressure → SHORT only (block LONGs)
   if (_vwap !== null) {
     const aboveVwap = price >= _vwap;
-    if (dir === 'SHORT' && aboveVwap) {
+    if (dir === 'SHORT' && aboveVwap && !isTrendStructure) {
       L(`Step1c FAIL — price ${price.toFixed(2)} above VWAP ${_vwap.toFixed(2)}, SHORT blocked`);
       return null;
     }
-    if (dir === 'LONG' && !aboveVwap) {
+    if (dir === 'LONG' && !aboveVwap && !isTrendStructure) {
       L(`Step1c FAIL — price ${price.toFixed(2)} below VWAP ${_vwap.toFixed(2)}, LONG blocked`);
       return null;
     }
@@ -2545,7 +2546,6 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   const cdKey = `${sym}_KL_${pivot15.barTs}`;
   const SYMBOL_CD = 60 * 60_000;
   if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < SYMBOL_CD) return null;
-  cooldowns.set(cdKey, now);
 
   const sl   = dir === 'LONG' ? pivot1m.price * (1 - cfg.slPct) : pivot1m.price * (1 + cfg.slPct);
   const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)           : price * (1 - TP1_PCT);

@@ -91,6 +91,8 @@ function formatSignal(raw) {
     score:     SCORE,
     rr:        parseFloat(rr),
     setupName: `${raw.pattern}(${raw.dir})@${raw.tf}`,
+    pattern15: raw.pattern15 || raw.pattern,
+    pivot15Ts: raw.pivot15Ts,
 
     // ── Price levels ───────────────────────────────────────
     entry:   entry,
@@ -100,6 +102,8 @@ function formatSignal(raw) {
     // ── Extended SMC-style context (for logging/UI) ───────
     smcContext: {
       pattern:  raw.pattern,
+      pattern15: raw.pattern15 || raw.pattern,
+      pivot15Ts: raw.pivot15Ts,
       tf:       raw.tf,
       ltfUsed:  raw.ltfUsed,   // '1m' | '3m' | '15m(no-ltf)'
       trend:    raw.trend,
@@ -579,7 +583,6 @@ class SMCPatternAgent extends BaseAgent {
               this.addActivity('skip', `${s.symbol} ${s.direction} — SMCPro fired recently (${waitMin}m cooldown)`);
               return false;
             }
-            lock.set(key, now); // claim the lock for this signal
             return true;
           });
         }
@@ -623,6 +626,13 @@ class SMCPatternAgent extends BaseAgent {
           this.addActivity('trade', `Executing ${pendingToExecute.length} next-candle signal(s) → TraderAgent`);
           bLog.trade(`[SMC-PAT] → TraderAgent.execute ${pendingToExecute.length} next-candle signal(s): ` +
             pendingToExecute.map(s => `${s.symbol} ${s.direction} score=${s.score}`).join(', '));
+          const execNow = Date.now();
+          for (const sig of pendingToExecute) {
+            const pivotTs = sig.pivot15Ts || sig.smcContext?.pivot15Ts;
+            if (pivotTs) this._cooldowns.set(`${sig.symbol}_KL_${pivotTs}`, execNow);
+            const lock = context.coordinator._sharedSignalLock;
+            if (lock) lock.set(`${sig.symbol}:${sig.direction}`, execNow);
+          }
           await traderAgent.execute({ signals: pendingToExecute, mode: 'signals' });
           this.addActivity('success', `TraderAgent executed ${pendingToExecute.length} next-candle signal(s)`);
         }
