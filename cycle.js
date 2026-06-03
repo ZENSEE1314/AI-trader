@@ -2103,10 +2103,11 @@ async function executeForAllUsers(pick) {
         const isLong = pick.direction !== 'SHORT';
         const patternText = `${pick.pattern15 || ''} ${pick.setupName || ''} ${pick.smcContext?.pattern || ''}`;
         const isProfessionalBacktestSetup =
-          !isLong &&
           (symbol === 'BTCUSDT' || symbol === 'ETHUSDT') &&
-          patternText.includes('LL') &&
-          patternText.includes('LH');
+          (
+            (!isLong && patternText.includes('LL') && patternText.includes('LH')) ||
+            ( isLong && patternText.includes('HH') && patternText.includes('HL'))
+          );
         if (PROFESSIONAL_STRATEGY_ONLY && !isProfessionalBacktestSetup) {
           userLog.trade(
             `User ${key.email}: blocked by professional mode — only BTC/ETH SHORT 15m LL->LH is allowed ` +

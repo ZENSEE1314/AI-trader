@@ -122,6 +122,16 @@ function professionalShortFilter(raw, now = Date.now()) {
   if (!PROFESSIONAL_SHORT_SYMBOLS.has(raw.symbol)) {
     return { pass: false, reason: `${raw.symbol} not in professional short whitelist` };
   }
+  const professionalPattern = String(raw.pattern15 || raw.pattern || '');
+  const professionalTrendShort = raw.dir === 'SHORT' && professionalPattern.includes('LL') && professionalPattern.includes('LH');
+  const professionalTrendLong = raw.dir === 'LONG' && professionalPattern.includes('HH') && professionalPattern.includes('HL');
+  if (professionalTrendShort || professionalTrendLong) {
+    if (!raw.pivot15Ts || now - raw.pivot15Ts > PROFESSIONAL_MAX_15M_AGE_MS) {
+      const ageMin = raw.pivot15Ts ? Math.round((now - raw.pivot15Ts) / 60_000) : 'unknown';
+      return { pass: false, reason: `${raw.symbol} 15m structure too old (${ageMin}m)` };
+    }
+    return { pass: true, reason: 'professional trend-follow setup' };
+  }
   if (raw.dir !== 'SHORT') {
     return { pass: false, reason: `${raw.symbol} ${raw.dir} blocked: professional mode is SHORT-only` };
   }
@@ -397,12 +407,14 @@ class SMCPatternAgent extends BaseAgent {
       // freshBars[last] = still-forming (current), freshBars[last-1] = last closed.
       // We need the bar that OPENED after the signal's pivot candle (barTs).
       // Find the first bar whose open time > pending.barTs.
-      const nextBar = freshBars.find(b => b.t > pending.barTs);
+      const nextIndex = freshBars.findIndex(b => b.t > pending.barTs);
+      const nextBar = nextIndex >= 0 ? freshBars[nextIndex] : null;
       if (!nextBar) {
         bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: no bar found after barTs ${pending.barTs} — retrying`);
         continue;
       }
 
+      const prevBar = nextIndex > 0 ? freshBars[nextIndex - 1] : null;
       const pivotLevel = pending.level; // 1m LH price (SHORT) or 1m HL price (LONG)
       const isShort    = pending.dir === 'SHORT';
 
@@ -434,6 +446,19 @@ class SMCPatternAgent extends BaseAgent {
           );
           // Advance barTs to this candle so we wait for the NEXT one
           pending.barTs = nextBar.t;
+        } else if (nextBar.c < pivotLevel * 0.997) {
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} SHORT: CANCELLED - close ${nextBar.c.toFixed(4)} ` +
+            `is too far below LH ${pivotLevel.toFixed(4)} - late chase entry`
+          );
+          this.addActivity('skip', `${sym} SHORT - too far below LH, no bottom short`);
+          this._pendingSignals.delete(sym);
+        } else if (!(nextBar.c < nextBar.o && (!prevBar || nextBar.c < prevBar.c))) {
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} SHORT: WAIT - LH held but candle not bearish ` +
+            `(o=${nextBar.o.toFixed(4)} c=${nextBar.c.toFixed(4)} prevC=${prevBar ? prevBar.c.toFixed(4) : 'n/a'})`
+          );
+          pending.barTs = nextBar.t;
         } else {
           // next bar HIGH < LH pivot → confirmed "not LH" → fire
           bLog.scan(
@@ -461,6 +486,19 @@ class SMCPatternAgent extends BaseAgent {
           bLog.scan(
             `[SMC-PAT] PENDING ${sym} LONG: WAIT — next bar LOW ${nextBar.l.toFixed(4)} ` +
             `still at HL level ${pivotLevel.toFixed(4)} — waiting another candle`
+          );
+          pending.barTs = nextBar.t;
+        } else if (nextBar.c > pivotLevel * 1.003) {
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} LONG: CANCELLED - close ${nextBar.c.toFixed(4)} ` +
+            `is too far above HL ${pivotLevel.toFixed(4)} - late chase entry`
+          );
+          this.addActivity('skip', `${sym} LONG - too far above HL, no top long`);
+          this._pendingSignals.delete(sym);
+        } else if (!(nextBar.c > nextBar.o && (!prevBar || nextBar.c > prevBar.c))) {
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} LONG: WAIT - HL held but candle not bullish ` +
+            `(o=${nextBar.o.toFixed(4)} c=${nextBar.c.toFixed(4)} prevC=${prevBar ? prevBar.c.toFixed(4) : 'n/a'})`
           );
           pending.barTs = nextBar.t;
         } else {

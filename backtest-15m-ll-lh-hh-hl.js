@@ -51,6 +51,10 @@ function money(n) {
   return `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`;
 }
 
+function avg(xs, pick = x => x) {
+  return xs.length ? xs.reduce((sum, x) => sum + pick(x), 0) / xs.length : 0;
+}
+
 function ymdUtc(date) {
   return date.toISOString().slice(0, 10);
 }
@@ -382,10 +386,27 @@ function simulateSymbol(symbol, bars) {
   }
 
   const wins = trades.filter(t => t.pnl > 0);
+  const losses = trades.filter(t => t.pnl <= 0);
+  const grossWin = wins.reduce((s, t) => s + t.pnl, 0);
+  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
+  const avgWin = avg(wins, t => t.pnl);
+  const avgLoss = Math.abs(avg(losses, t => t.pnl));
+  const breakEvenWr = avgWin + avgLoss > 0 ? avgLoss / (avgWin + avgLoss) : 0;
   const side = dir => {
     const xs = trades.filter(t => t.dir === dir);
     const ws = xs.filter(t => t.pnl > 0);
-    return { trades: xs.length, wins: ws.length, wr: xs.length ? ws.length / xs.length : 0, pnl: xs.reduce((s, t) => s + t.pnl, 0) };
+    const ls = xs.filter(t => t.pnl <= 0);
+    const gw = ws.reduce((s, t) => s + t.pnl, 0);
+    const gl = Math.abs(ls.reduce((s, t) => s + t.pnl, 0));
+    return {
+      trades: xs.length,
+      wins: ws.length,
+      wr: xs.length ? ws.length / xs.length : 0,
+      pnl: xs.reduce((s, t) => s + t.pnl, 0),
+      avgWin: avg(ws, t => t.pnl),
+      avgLoss: Math.abs(avg(ls, t => t.pnl)),
+      profitFactor: gl > 0 ? gw / gl : Infinity,
+    };
   };
 
   return {
@@ -401,6 +422,10 @@ function simulateSymbol(symbol, bars) {
     tp: trades.filter(t => t.reason === 'TP').length,
     sl: trades.filter(t => t.reason.startsWith('SL')).length,
     timeout: trades.filter(t => t.reason === 'TIMEOUT').length,
+    avgWin,
+    avgLoss,
+    profitFactor: grossLoss > 0 ? grossWin / grossLoss : Infinity,
+    breakEvenWr,
   };
 }
 
@@ -422,16 +447,23 @@ async function main() {
   console.log('-------');
   for (const r of results.sort((a, b) => b.pnl - a.pnl)) {
     console.log(`${r.symbol.padEnd(10)} trades=${String(r.trades).padStart(4)} WR=${(r.wr * 100).toFixed(1).padStart(5)}% final=${money(r.final).padStart(10)} pnl=${money(r.pnl).padStart(10)} L/S=${r.long.trades}/${r.short.trades} TP/SL/TO=${r.tp}/${r.sl}/${r.timeout}`);
-    console.log(`           LONG  trades=${String(r.long.trades).padStart(4)} WR=${(r.long.wr * 100).toFixed(1).padStart(5)}% pnl=${money(r.long.pnl).padStart(10)} | SHORT trades=${String(r.short.trades).padStart(4)} WR=${(r.short.wr * 100).toFixed(1).padStart(5)}% pnl=${money(r.short.pnl).padStart(10)}`);
+    console.log(`           AvgW=${money(r.avgWin)} AvgL=${money(r.avgLoss)} PF=${Number.isFinite(r.profitFactor) ? r.profitFactor.toFixed(2) : 'inf'} BE_WR=${(r.breakEvenWr * 100).toFixed(1)}%`);
+    console.log(`           LONG  trades=${String(r.long.trades).padStart(4)} WR=${(r.long.wr * 100).toFixed(1).padStart(5)}% pnl=${money(r.long.pnl).padStart(10)} AvgW=${money(r.long.avgWin)} AvgL=${money(r.long.avgLoss)} PF=${Number.isFinite(r.long.profitFactor) ? r.long.profitFactor.toFixed(2) : 'inf'} | SHORT trades=${String(r.short.trades).padStart(4)} WR=${(r.short.wr * 100).toFixed(1).padStart(5)}% pnl=${money(r.short.pnl).padStart(10)} AvgW=${money(r.short.avgWin)} AvgL=${money(r.short.avgLoss)} PF=${Number.isFinite(r.short.profitFactor) ? r.short.profitFactor.toFixed(2) : 'inf'}`);
   }
 
   const totalStart = results.length * START_BALANCE;
   const totalFinal = results.reduce((sum, r) => sum + r.final, 0);
   const totalTrades = results.reduce((sum, r) => sum + r.trades, 0);
   const totalWins = results.reduce((sum, r) => sum + r.wins, 0);
+  const totalLosses = totalTrades - totalWins;
+  const allWinDollars = results.reduce((sum, r) => sum + r.avgWin * r.wins, 0);
+  const allLossDollars = results.reduce((sum, r) => sum + r.avgLoss * (r.trades - r.wins), 0);
+  const allAvgWin = totalWins ? allWinDollars / totalWins : 0;
+  const allAvgLoss = totalLosses ? allLossDollars / totalLosses : 0;
+  const allBreakEvenWr = allAvgWin + allAvgLoss > 0 ? allAvgLoss / (allAvgWin + allAvgLoss) : 0;
   console.log('\nPortfolio');
   console.log('---------');
-  console.log(`tokens=${results.length} start=${money(totalStart)} final=${money(totalFinal)} pnl=${money(totalFinal - totalStart)} trades=${totalTrades} WR=${totalTrades ? (totalWins / totalTrades * 100).toFixed(1) : '0.0'}%`);
+  console.log(`tokens=${results.length} start=${money(totalStart)} final=${money(totalFinal)} pnl=${money(totalFinal - totalStart)} trades=${totalTrades} WR=${totalTrades ? (totalWins / totalTrades * 100).toFixed(1) : '0.0'}% AvgW=${money(allAvgWin)} AvgL=${money(allAvgLoss)} PF=${allLossDollars > 0 ? (allWinDollars / allLossDollars).toFixed(2) : 'inf'} BE_WR=${(allBreakEvenWr * 100).toFixed(1)}%`);
 }
 
 main().catch(err => {

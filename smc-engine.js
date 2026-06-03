@@ -2527,6 +2527,21 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   // ── Cooldown: each 15m pivot LEVEL fires at most once ───────────────
   // Use pivot15.barTs so a CHoCH LONG at pivot A does not block a SHORT at pivot B.
   // Different pivot levels are independent setups — only the same level is deduplicated.
+  const prev1m = bars1m[bars1m.length - 2] || null;
+  if (dir === 'SHORT') {
+    const bearishConfirm = cur.c < cur.o && (!prev1m || cur.c < prev1m.c);
+    if (!bearishConfirm) {
+      L(`Step4a FAIL — SHORT needs bearish confirmation candle (o=${cur.o.toFixed(2)} c=${cur.c.toFixed(2)} prevC=${prev1m ? prev1m.c.toFixed(2) : 'n/a'})`);
+      return null;
+    }
+  } else {
+    const bullishConfirm = cur.c > cur.o && (!prev1m || cur.c > prev1m.c);
+    if (!bullishConfirm) {
+      L(`Step4a FAIL — LONG needs bullish confirmation candle (o=${cur.o.toFixed(2)} c=${cur.c.toFixed(2)} prevC=${prev1m ? prev1m.c.toFixed(2) : 'n/a'})`);
+      return null;
+    }
+  }
+
   const cdKey = `${sym}_KL_${pivot15.barTs}`;
   const SYMBOL_CD = 60 * 60_000;
   if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < SYMBOL_CD) return null;
