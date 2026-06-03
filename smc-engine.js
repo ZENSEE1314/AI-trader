@@ -2007,6 +2007,8 @@ const BOUNCE_WATCH_ENABLED = process.env.BOUNCE_WATCH_ENABLED !== '0';
 const BOUNCE_WATCH_EXPIRE_MS = (parseInt(process.env.BOUNCE_WATCH_EXPIRE_MIN || '90', 10) || 90) * 60_000;
 const BOUNCE_WATCH_MAX_LH_AGE = parseInt(process.env.BOUNCE_WATCH_MAX_LH_AGE || '10', 10);
 const BOUNCE_WATCH_MIN_RETRACE = parseFloat(process.env.BOUNCE_WATCH_MIN_RETRACE || '0.45');
+const DIRECT_15M_ENABLED = process.env.DIRECT_15M_ENABLED !== '0';
+const DIRECT_15M_MAX_BARS = parseInt(process.env.DIRECT_15M_MAX_BARS || '3', 10);
                                     // If ENTRY_TOL > slPct the SL would float above the structural HL when
                                     // entering at max drift, blowing out capital by 2× slPct × leverage.
 
@@ -2467,8 +2469,17 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     }
   }
   if (!pivot1m) {
-    L(`Step2 WAIT — no 1m swing ${dir === 'SHORT' ? 'HIGH' : 'LOW'} within window of 15m pivot`);
-    return null;
+    const pivot15Age = (bars15m.length - 1) - pivot15.idx;
+    const direct15mOk = DIRECT_15M_ENABLED &&
+      pivot15Age <= DIRECT_15M_MAX_BARS &&
+      ((dir === 'SHORT' && label.includes('LL') && label.includes('LH')) ||
+       (dir === 'LONG' && label.includes('HH') && label.includes('HL')));
+    if (!direct15mOk) {
+      L(`Step2 WAIT - no 1m swing ${dir === 'SHORT' ? 'HIGH' : 'LOW'} within window of 15m pivot`);
+      return null;
+    }
+    pivot1m = pivot15;
+    L(`Step2 DIRECT-15M PASS - no fresh 1m swing, using fresh 15m ${dir === 'SHORT' ? 'LH' : 'HL'} @ ${pivot1m.price.toFixed(2)}`);
   }
   L(`Step2 PASS ✓ — 1m swing ${dir === 'SHORT' ? 'HIGH' : 'LOW'} @ ${pivot1m.price.toFixed(2)}`);
 
@@ -2496,6 +2507,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   }
 
   // ── STEP 2b: 1m pivot level must be close to 15m pivot ──────────────
+  const direct15mEntry = pivot1m === pivot15;
   const LEVEL_TOL = cfg.slPct * 2;
   const levelDiff = Math.abs(pivot1m.price - pivot15.price) / pivot15.price;
   if (levelDiff > LEVEL_TOL) {
@@ -2508,12 +2520,13 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   // can take 10-25 min for the 1m swing to fully print (2L/2R pivot needs
   // 2 bars each side = 4 min minimum lag). 10-bar limit was too tight and
   // killed most valid setups. 30 bars = 30 min gives the entry window room.
-  const bars1mNowAge = (total1m - 1) - pivot1m.idx;
-  if (bars1mNowAge > 30) {
-    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 30) — entry missed, reset`);
+  const pivotNowAge = direct15mEntry ? (bars15m.length - 1) - pivot15.idx : (total1m - 1) - pivot1m.idx;
+  const maxPivotAge = direct15mEntry ? DIRECT_15M_MAX_BARS : 30;
+  if (pivotNowAge > maxPivotAge) {
+    L(`Step3 FAIL - ${direct15mEntry ? '15m' : '1m'} pivot is ${pivotNowAge} bars old (max ${maxPivotAge}) - entry missed, reset`);
     return null;
   }
-  L(`Step3 PASS ✓ — 1m pivot is ${bars1mNowAge} bars old`);
+  L(`Step3 PASS - ${direct15mEntry ? '15m' : '1m'} pivot is ${pivotNowAge} bars old`);
 
   // ── STEP 4: Chase filter — entry must be within ENTRY_TOL of the 1m pivot ──
   if (dir === 'LONG'  && price > pivot1m.price * (1 + ENTRY_TOL)) {
