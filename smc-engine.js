@@ -2532,34 +2532,29 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
 
   L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
 
-  // ── Step 1b: 4H trend gate ───────────────────────────────────────────
-  // CHoCH flip signals bypass the 4H filter — the CHoCH itself IS the trend
-  // reversal evidence. Blocking a CHoCH↑ LONG because "4H is DOWN" defeats the purpose.
-  const isChochFlip = label === 'LL→CHoCH↑' || label === 'HH→CHoCH↓';
-  const isTrendStructure = (label.includes('LL') && label.includes('LH')) || (label.includes('HH') && label.includes('HL'));
+  // ── Step 1b: 4H trend gate — strict directional filter ─────────────────
+  // UP trend   → LONG only  (no shorts, no exceptions)
+  // DOWN trend → SHORT only (no longs, no exceptions)
+  // NEUTRAL    → skip (no confirmed trend = no edge)
+  const isChochFlip = false;     // CHoCH bypass removed — trend is law
+  const isTrendStructure = false; // structure bypass removed — trend is law
   let trend4h = 'NEUTRAL';
   try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}
-  if (!isChochFlip) {
-    // Hard block: never trade against the confirmed 4H trend direction
-    if (dir === 'LONG'  && trend4h === 'DOWN') { L(`Step1b FAIL — 4H DOWN, rejecting LONG`);  return null; }
-    if (dir === 'SHORT' && trend4h === 'UP')   { L(`Step1b FAIL — 4H UP, rejecting SHORT`);   return null; }
-    // NEUTRAL = no directional EMA alignment → no institutional conviction → skip
-    // Exception: full two-pivot structures (LL→LH = bearish; HH→HL = bullish) carry
-    // their own structural evidence, so they bypass the NEUTRAL gate but NOT UP/DOWN above.
-    if (trend4h === 'NEUTRAL' && !isTrendStructure) { L(`Step1b FAIL — 4H NEUTRAL + no two-pivot structure, no directional edge`); return null; }
-  }
-  L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}${isChochFlip ? ' (CHoCH flip bypass)' : isTrendStructure ? ' (trend-structure bypass)' : ''}`);
+  if (trend4h === 'UP'   && dir !== 'LONG')  { L(`Step1b FAIL — 4H UP, LONG only (got ${dir})`);    return null; }
+  if (trend4h === 'DOWN' && dir !== 'SHORT') { L(`Step1b FAIL — 4H DOWN, SHORT only (got ${dir})`); return null; }
+  if (trend4h === 'NEUTRAL')                 { L(`Step1b FAIL — 4H NEUTRAL, no trade`);             return null; }
+  L(`Step1b PASS ✓ — 4H trend=${trend4h} → ${dir} ✓`);
 
   // ── Step 1c: VWAP directional filter ────────────────────────────────────
   // Above VWAP = buy-side pressure → LONG only (block SHORTs)
   // Below VWAP = sell-side pressure → SHORT only (block LONGs)
   if (_vwap !== null) {
     const aboveVwap = price >= _vwap;
-    if (dir === 'SHORT' && aboveVwap && !isTrendStructure) {
+    if (dir === 'SHORT' && aboveVwap) {
       L(`Step1c FAIL — price ${price.toFixed(2)} above VWAP ${_vwap.toFixed(2)}, SHORT blocked`);
       return null;
     }
-    if (dir === 'LONG' && !aboveVwap && !isTrendStructure) {
+    if (dir === 'LONG' && !aboveVwap) {
       L(`Step1c FAIL — price ${price.toFixed(2)} below VWAP ${_vwap.toFixed(2)}, LONG blocked`);
       return null;
     }
