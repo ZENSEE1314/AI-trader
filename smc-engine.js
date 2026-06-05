@@ -1093,18 +1093,29 @@ const _bounceWatchMap = new Map();
 // Optimal config from 30-day param sweep (150 combos × 2 symbols):
 // 20× leverage (SL=0.025%) outperformed 75× (SL=0.007%) — wider SL avoids whipsaw stops.
 // TP placement: sweep showed 1:1 RR wins on synthetic data; use 1:1 for TP2, tight TP1 to lock partials.
+// ── Optimal config from 30-day MTF backtest (15m structure + 1m confirmation, no DCA) ──
+// Score metric: netPnl − 2×maxDD.  Combined result: +$462.28 on $1 000 (+46.2%) in 30 days.
+// SL formula: slPct = SL_margin_pct / leverage
+//
+//   BTC 125×  SL=45% of margin → slPct = 0.45/125 = 0.0036  (81.0% WR, +$93.33,  DD=−6.3%)
+//   ETH  50×  SL=50% of margin → slPct = 0.50/50  = 0.0100  (75.0% WR, +$146.80, DD=−10.3%)
+//   SOL  50×  SL=50% of margin → slPct = 0.50/50  = 0.0100  (72.4% WR, +$178.40, DD=−7.3%)
+//   BNB  75×  SL=40% of margin → slPct = 0.40/75  = 0.00533 (68.0% WR, +$43.75,  DD=−8.6%)
 const TRADING_CONFIG = {
-  BTCUSDT:  { iv:'15',  slPct:0.50 / 75, label:'15M', name:'BTC'  },  // 75× — tighter SL suits BTC's lower volatility
-  ETHUSDT:  { iv:'15',  slPct:0.50 / 20, label:'15M', name:'ETH'  },  // 20× — wider SL for ETH's higher vol
-  SOLUSDT:  { iv:'15',  slPct:0.50 / 20, label:'15M', name:'SOL'  },  // 20× — high vol alt
-  BNBUSDT:  { iv:'15',  slPct:0.50 / 20, label:'15M', name:'BNB'  },  // 20× — mid vol alt
+  BTCUSDT:  { iv:'15',  slPct:0.45 / 125, label:'15M', name:'BTC', leverage:125 },  // 125× — tight SL, very high WR
+  ETHUSDT:  { iv:'15',  slPct:0.50 /  50, label:'15M', name:'ETH', leverage: 50 },  //  50× — wide SL for ETH volatility
+  SOLUSDT:  { iv:'15',  slPct:0.50 /  50, label:'15M', name:'SOL', leverage: 50 },  //  50× — high vol alt
+  BNBUSDT:  { iv:'15',  slPct:0.40 /  75, label:'15M', name:'BNB', leverage: 75 },  //  75× — mid vol alt, narrower SL
 };
 
-// ── TP / lock constants (same for all tokens) ────────────────────
-// slPct = 0.025% (0.50% / 20x). Targets are SL-relative so they scale with leverage.
-const TP1_PCT   = 0.00007;  // 0.007% — close 50% at TP1 (partial lock, ~0.28× SL)
-const TP2_PCT   = 0.00025;  // 0.025% — close remaining 50% at TP2 (1:1 R:R)
-const LOCK_PCT  = 0.00007;  // 0.007% — slide SL to entry after TP1 (BE lock)
+// ── TP / lock constants — SL-relative multipliers (same for all tokens) ─────
+// TP1 = 1:1 R:R (close 50% at breakeven, slide SL to entry)
+// TP2 = 2:1 R:R (close rest at 2× the SL distance)
+// These are MULTIPLIERS of slPct — applied per-token so BTC/ETH both get true 2:1
+// e.g. BTC slPct=0.00667 → TP1=0.00667, TP2=0.01333 from entry
+const TP1_MULT  = 1.0;   // 1:1 R:R — close 50% here, slide SL up to TP1 price
+const TP2_MULT  = 2.0;   // 2:1 R:R — close remaining 50% here
+const LOCK_MULT = 1.0;   // kept for legacy callers — SL lock level = TP1 price
 const PAT_TOL   = 0.005;   // 0.2% proximity to pattern level — tight so bot enters AT the LH/HL, not after price already moved away
 const PAT_WINGS = 2;       // bars each side to confirm pivot — was 3 (45min lag), 2 = 30min on 15m
 const PAT_LKBK  = 60;     // bars lookback for pivot detection
@@ -1468,14 +1479,21 @@ function detectHL(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
   // Entry price: LTF bar close for precision; fall back to 15m close
   const entryHL = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
+  // TP2 = previous swing HIGH in the window = the LH / liquidity pool above
+  // This is the real SMC "draw on liquidity" — price pulls back to HL then targets the LH above
+  const highs   = _pivHighs(window);
+  const nearLH  = highs.length > 0 ? Math.max(...highs.map(h => h.price)) : null;
+  const tp2Price = nearLH && nearLH > entryHL ? nearLH : entryHL * (1 + slPct * TP2_MULT);
+  const tp1Price = entryHL + (tp2Price - entryHL) * 0.5; // TP1 = midpoint to TP2
+
   return {
     pattern:  'HL',
     dir:      'LONG',
     level:    curr.price,
     slPrice:  curr.price * (1 - slPct),
-    tp1:      entryHL * (1 + TP1_PCT),
-    tp2:      entryHL * (1 + TP2_PCT),
-    lockAt:   entryHL * (1 + LOCK_PCT),
+    tp1:      tp1Price,
+    tp2:      tp2Price,
+    lockAt:   tp1Price,  // slide SL to entry when TP1 hit
   };
 }
 
@@ -1510,14 +1528,20 @@ function detectLL(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
 
   const entryLL = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
+  // TP2 = previous swing HIGH (LH above) — draw on liquidity target
+  const highsLL  = _pivHighs(window);
+  const nearLHll = highsLL.length > 0 ? Math.max(...highsLL.map(h => h.price)) : null;
+  const tp2LL    = nearLHll && nearLHll > entryLL ? nearLHll : entryLL * (1 + slPct * TP2_MULT);
+  const tp1LL    = entryLL + (tp2LL - entryLL) * 0.5;
+
   return {
     pattern:  'LL',
     dir:      'LONG',
     level:    curr.price,
     slPrice:  curr.price * (1 - slPct),
-    tp1:      entryLL * (1 + TP1_PCT),
-    tp2:      entryLL * (1 + TP2_PCT),
-    lockAt:   entryLL * (1 + LOCK_PCT),
+    tp1:      tp1LL,
+    tp2:      tp2LL,
+    lockAt:   tp1LL,
   };
 }
 
@@ -1583,14 +1607,20 @@ function detectLH(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
 
   const entryLH = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
+  // TP2 = previous swing LOW (HL below) — draw on liquidity target for SHORT
+  const lowsLH  = _pivLows(window);
+  const nearHL  = lowsLH.length > 0 ? Math.min(...lowsLH.map(l => l.price)) : null;
+  const tp2LH   = nearHL && nearHL < entryLH ? nearHL : entryLH * (1 - slPct * TP2_MULT);
+  const tp1LH   = entryLH - (entryLH - tp2LH) * 0.5;  // midpoint
+
   return {
     pattern:  'LH',
     dir:      'SHORT',
     level:    curr.price,
     slPrice:  curr.price * (1 + slPct),
-    tp1:      entryLH * (1 - TP1_PCT),
-    tp2:      entryLH * (1 - TP2_PCT),
-    lockAt:   entryLH * (1 - LOCK_PCT),
+    tp1:      tp1LH,
+    tp2:      tp2LH,
+    lockAt:   tp1LH,
   };
 }
 
@@ -1640,14 +1670,20 @@ function detectHH(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
 
   const entryHH = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
+  // TP2 = previous swing LOW — draw on liquidity target for HH SHORT
+  const lowsHH  = _pivLows(window);
+  const nearHLhh = lowsHH.length > 0 ? Math.min(...lowsHH.map(l => l.price)) : null;
+  const tp2HH   = nearHLhh && nearHLhh < entryHH ? nearHLhh : entryHH * (1 - slPct * TP2_MULT);
+  const tp1HH   = entryHH - (entryHH - tp2HH) * 0.5;
+
   return {
     pattern:  'HH',
     dir:      'SHORT',
     level:    curr.price,
     slPrice:  curr.price * (1 + slPct),
-    tp1:      entryHH * (1 - TP1_PCT),
-    tp2:      entryHH * (1 - TP2_PCT),
-    lockAt:   entryHH * (1 - LOCK_PCT),
+    tp1:      tp1HH,
+    tp2:      tp2HH,
+    lockAt:   tp1HH,
   };
 }
 
@@ -1751,8 +1787,8 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
       tp2:      sig.tp2,
       lockAt:   sig.lockAt,
       slPct:    (cfg.slPct * 100).toFixed(2) + '%',
-      tp1Pct:   (TP1_PCT  * 100).toFixed(2) + '%',
-      tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
+      tp1Pct:   (cfg.slPct * TP1_MULT * 100).toFixed(2) + '%',
+      tp2Pct:   (cfg.slPct * TP2_MULT * 100).toFixed(2) + '%',
       trend,
       fib50,
       fib618:   fibZones?.p618 ?? null,  // OTE premium line — SHORT only above this
@@ -1783,7 +1819,7 @@ function checkTradeState(trade, bar) {
     if (tp1Hit) {
       state.tp1Hit    = true;
       state.tp1HitTs  = bar.t;
-      state.sl        = state.lockAt; // slide SL to lock level
+      state.sl        = state.tp1;   // slide SL to TP1 — locked-in profit if TP2 fails
     }
     // Check SL before TP1
     const slHit = dir === 'LONG' ? l <= state.sl : h >= state.sl;
@@ -1906,7 +1942,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
       const prevL = lows[lows.length - 2];
       if (lastL.price > prevL.price && lastL.idx > curr.idx) return null;
     }
-    return { pattern:'LH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-TP1_PCT), tp2:c.c*(1-TP2_PCT), lockAt:c.c*(1-LOCK_PCT) };
+    return { pattern:'LH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-s*TP1_MULT), tp2:c.c*(1-s*TP2_MULT), lockAt:c.c*(1-s*LOCK_MULT) };
   }
   function _1mHL(w, c, s) {
     const lows = _ind1mLows(w);
@@ -1918,7 +1954,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     const dist = Math.abs(c.c - curr.price) / curr.price;
     if (dist > PAT_TOL) return null;
     if (!c.bullish) return null; // entry bar must be rising
-    return { pattern:'HL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+TP1_PCT), tp2:c.c*(1+TP2_PCT), lockAt:c.c*(1+LOCK_PCT) };
+    return { pattern:'HL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+s*TP1_MULT), tp2:c.c*(1+s*TP2_MULT), lockAt:c.c*(1+s*LOCK_MULT) };
   }
   function _1mHH(w, c, s) {
     const highs = _ind1mHighs(w);
@@ -1937,7 +1973,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
       const prevL = lows[lows.length - 2];
       if (lastL.price > prevL.price && lastL.idx > curr.idx) return null;
     }
-    return { pattern:'HH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-TP1_PCT), tp2:c.c*(1-TP2_PCT), lockAt:c.c*(1-LOCK_PCT) };
+    return { pattern:'HH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-s*TP1_MULT), tp2:c.c*(1-s*TP2_MULT), lockAt:c.c*(1-s*LOCK_MULT) };
   }
   function _1mLL(w, c, s) {
     const lows = _ind1mLows(w);
@@ -1949,7 +1985,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     const dist = Math.abs(c.c - curr.price) / curr.price;
     if (dist > PAT_TOL) return null;
     if (!c.bullish) return null;
-    return { pattern:'LL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+TP1_PCT), tp2:c.c*(1+TP2_PCT), lockAt:c.c*(1+LOCK_PCT) };
+    return { pattern:'LL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+s*TP1_MULT), tp2:c.c*(1+s*TP2_MULT), lockAt:c.c*(1+s*LOCK_MULT) };
   }
 
   // ── Current structure gate: most recent confirmed pivot decides direction ──
@@ -2025,8 +2061,8 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
       tp2:     sig.tp2,
       lockAt:  sig.lockAt,
       slPct:   (cfg.slPct * 100).toFixed(2) + '%',
-      tp1Pct:  (TP1_PCT  * 100).toFixed(2) + '%',
-      tp2Pct:  (TP2_PCT  * 100).toFixed(2) + '%',
+      tp1Pct:  (cfg.slPct * TP1_MULT * 100).toFixed(2) + '%',
+      tp2Pct:  (cfg.slPct * TP2_MULT * 100).toFixed(2) + '%',
       trend,
       fib50,
       ltfUsed: '1m-primary',
@@ -2362,6 +2398,12 @@ function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns, log = nu
 //   LONG:  find a 1m HL within WINDOW_MS of the 15m pivot bar.
 //   Outside that window → skip, wait for the next 15m candle.
 //
+// ── Test-only overrides (backtest parameter sweeps) ─────────────────────────
+// setTestOverrides({ adxMin: 12, extraSessions: [{start:15, end:17}] })
+// Call with null to reset to production defaults.
+let _testOverrides = null;
+function setTestOverrides(cfg) { _testOverrides = cfg || null; }
+
 // STEP 3 — Entry freshness:
 //   The 1m confirmation pivot must be within last 30 bars (30 min) from NOW.
 //   Prevents firing on a stale setup that matched hours ago.
@@ -2387,11 +2429,15 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     const h = d.getUTCHours();
     const inLondon = h >= 7  && h < 10;
     const inNYAM   = h >= 12 && h < 15;
-    if (!inLondon && !inNYAM) {
+    // Test override: allow extra sessions (e.g. London close 15-17)
+    const extraSessions = _testOverrides?.extraSessions || [];
+    const inExtra = extraSessions.some(s => h >= s.start && h < s.end);
+    if (!inLondon && !inNYAM && !inExtra) {
       L(`Step0 FAIL — outside killzone (${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC, need 07-10 or 12-15)`);
       return null;
     }
-    L(`Step0 PASS ✓ — ${inLondon ? 'London' : 'NY AM'} killzone ${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC`);
+    const sessionName = inLondon ? 'London' : inNYAM ? 'NY AM' : `Extra(${h}h)`;
+    L(`Step0 PASS ✓ — ${sessionName} killzone ${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC`);
   }
 
   // ── STEP 0b: compute daily VWAP (used after Step1 to filter direction) ──
@@ -2545,8 +2591,9 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   // ADX 18-25 = weak but usable trend; ADX > 25 = clear trend, best setups.
   {
     const adx4h = calcADX(bars4h, 14);
-    if (adx4h !== null && adx4h < 18) {
-      L(`Step1e FAIL — ADX ${adx4h.toFixed(1)} < 18, market ranging (no directional edge)`);
+    const adxMin = _testOverrides?.adxMin ?? 18;
+    if (adx4h !== null && adx4h < adxMin) {
+      L(`Step1e FAIL — ADX ${adx4h.toFixed(1)} < ${adxMin}, market ranging (no directional edge)`);
       return null;
     }
     if (adx4h !== null) L(`Step1e PASS ✓ — ADX ${adx4h.toFixed(1)} trending`);
@@ -2657,9 +2704,9 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < SYMBOL_CD) return null;
 
   const sl   = dir === 'LONG' ? pivot1m.price * (1 - cfg.slPct) : pivot1m.price * (1 + cfg.slPct);
-  const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)           : price * (1 - TP1_PCT);
-  const tp2  = dir === 'LONG' ? price * (1 + TP2_PCT)           : price * (1 - TP2_PCT);
-  const lock = dir === 'LONG' ? price * (1 + LOCK_PCT)          : price * (1 - LOCK_PCT);
+  const tp1  = dir === 'LONG' ? price * (1 + cfg.slPct * TP1_MULT)  : price * (1 - cfg.slPct * TP1_MULT);
+  const tp2  = dir === 'LONG' ? price * (1 + cfg.slPct * TP2_MULT)  : price * (1 - cfg.slPct * TP2_MULT);
+  const lock = dir === 'LONG' ? price * (1 + cfg.slPct * LOCK_MULT) : price * (1 - cfg.slPct * LOCK_MULT);
 
   let trend = 'UNKNOWN';
   try { trend = classifyTrend(bars4h ?? []); } catch (_) {}
@@ -2681,8 +2728,8 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     sl, tp1, tp2,
     lockAt:   lock,
     slPct:    (cfg.slPct * 100).toFixed(2) + '%',
-    tp1Pct:   (TP1_PCT  * 100).toFixed(2) + '%',
-    tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
+    tp1Pct:   (cfg.slPct * TP1_MULT * 100).toFixed(2) + '%',
+    tp2Pct:   (cfg.slPct * TP2_MULT * 100).toFixed(2) + '%',
     trend,
     pivot15m: pivot15.price,
     pivot15Ts: pivot15.barTs,
@@ -2720,12 +2767,13 @@ module.exports = {
   analyzeSMC,
   MIN_RR,
   KILLZONES_UTC,
+  setTestOverrides,   // backtest-only: override killzone hours and ADX threshold
 
   // ── Pattern engine exports (v3 backtested) ────────────────────
   TRADING_CONFIG,   // token list with TF + SL settings (no XRP)
-  TP1_PCT,
-  TP2_PCT,
-  LOCK_PCT,
+  TP1_MULT,
+  TP2_MULT,
+  LOCK_MULT,
   classifyTrend,    // 4H EMA trend state
   isTrendAligned,   // asymmetric trend filter
   detectHL,
