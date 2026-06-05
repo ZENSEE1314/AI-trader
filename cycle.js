@@ -9,7 +9,7 @@ const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 // V4 SMC strategy: VWAP 2σ zones + 15m/1m BOS+CHoCH confluence
 // Rules: bull days → LONG only | bear days → SHORT only | ranging → nothing
-const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, SYMBOL_SL_PCT } = require('./strategy-v4-smc');
+const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, SYMBOL_SL_PCT } = require('./strategy-v5-smc');
 const { scanHommaSMC } = require('./strategy-homma-smc');
 // Keep 3-timing import for calcTrail3Timing + getSessionMode (still used elsewhere)
 const { getSessionMode } = require('./strategy-3timing'); // v4: trailing SL uses calculateTrailingStep (cycle.js) instead of calcTrail3Timing
@@ -107,9 +107,12 @@ function injectTVSignal(signal) {
   console.log(`[TV-Queue] Queued ${signal.symbol} ${signal.direction} — will fire next cycle`);
 }
 
+// V5: 4-token concurrent config — BTC 75×, ETH/SOL/BNB 20×
 let TOKEN_LEVERAGE = {
   BTCUSDT: 75,
-  ETHUSDT: 75,
+  ETHUSDT: 20,
+  SOLUSDT: 20,
+  BNBUSDT: 20,
 };
 
 async function loadV4Config() {
@@ -120,8 +123,11 @@ async function loadV4Config() {
 
     // NOTE: capital_pct intentionally NOT loaded from DB — hardcoded at 10% in all scenarios.
     // if (cfg.capital_pct) CAPITAL_PER_TRADE = parseFloat(cfg.capital_pct) / 100;
+    // V5 optimal leverage from param sweep
     TOKEN_LEVERAGE.BTCUSDT = 75;
-    TOKEN_LEVERAGE.ETHUSDT = 75;
+    TOKEN_LEVERAGE.ETHUSDT = 20;
+    TOKEN_LEVERAGE.SOLUSDT = 20;
+    TOKEN_LEVERAGE.BNBUSDT = 20;
 
     // NOTE: per-symbol capital overrides intentionally disabled — all tokens use hardcoded 10%.
     // for (const sym of ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'ADAUSDT']) {
@@ -160,7 +166,7 @@ async function loadV4Config() {
     const t50  = dynamicTiers['50'];
     const capEth = SYMBOL_CAPITAL['ETHUSDT'] ? `ETH=${(SYMBOL_CAPITAL['ETHUSDT']*100).toFixed(0)}%` : '';
     const capOverrides = Object.keys(SYMBOL_CAPITAL).map(s => `${s.replace('USDT','')}=${(SYMBOL_CAPITAL[s]*100).toFixed(0)}%`).join(' ');
-    console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}%${capOverrides ? ` (overrides: ${capOverrides})` : ''} | leverage: BTC=${TOKEN_LEVERAGE.BTCUSDT}x ETH=${TOKEN_LEVERAGE.ETHUSDT}x`);
+    console.log(`[V5 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}%${capOverrides ? ` (overrides: ${capOverrides})` : ''} | leverage: BTC=${TOKEN_LEVERAGE.BTCUSDT}x ETH=${TOKEN_LEVERAGE.ETHUSDT}x SOL=${TOKEN_LEVERAGE.SOLUSDT}x BNB=${TOKEN_LEVERAGE.BNBUSDT}x`);
     console.log(`[V4 Config] TSL tiers — 100x: T1=${t100[0].trigger*100}%→${t100[0].lock*100}% T2=${t100[1].trigger*100}%→${t100[1].lock*100}% T3=${t100[2].trigger*100}%→${t100[2].lock*100}% step=${g('tsl_100x_step',10)}%`);
     console.log(`[V4 Config] TSL tiers —  75x: T1=${t75[0].trigger*100}%→${t75[0].lock*100}%  T2=${t75[1].trigger*100}%→${t75[1].lock*100}%  T3=${t75[2].trigger*100}%→${t75[2].lock*100}%  step=${g('tsl_75x_step',10)}%`);
     console.log(`[V4 Config] TSL tiers —  50x: T1=${t50[0].trigger*100}%→${t50[0].lock*100}%  T2=${t50[1].trigger*100}%→${t50[1].lock*100}%  T3=${t50[2].trigger*100}%→${t50[2].lock*100}%  step=${g('tsl_50x_step',11)}%`);

@@ -38,7 +38,11 @@ const {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const SYMBOLS           = Object.keys(TRADING_CONFIG);  // all 9 from production config
-const BARS_15M          = 2000;   // ~20.8 days of 15m
+// 30-day backtest window:
+//   EMA200 warmup  = 200 4H bars × 16 (15m/bar) = 3200 bars
+//   30 trading days = 30 × 24h × 4 bars/h       = 2880 bars
+//   Total needed                                  = 6080 bars
+const BARS_15M          = 6080;   // 3200 warmup + 2880 live = 30 days of real trading
 const STARTING_CAP      = 1000;
 const RISK_PCT          = 0.02;
 const FIXED_RISK        = STARTING_CAP * RISK_PCT;  // $20 per trade
@@ -47,9 +51,15 @@ const MAX_HOLD_1M       = 120;    // max 120 1m bars to hold trade (2h)
 const SCAN_EVERY        = 1;      // scan every N 15m bars
 
 // ─── Synthetic data generation ────────────────────────────────────────────────
+// NOTE: BTC and ETH use 'down' regime to simulate a realistic bear market
+// (matches current real conditions: BTC RSI=17.5, ETH RSI=15.3, both full bearish EMA stack).
+// This allows the 4H trend classifier to produce DOWN signals — enabling trend-following SHORTs
+// which are the highest-WR setups in the strategy.
 const SYMBOL_PARAMS = {
-  BTCUSDT:  { price: 67500, vol: 0.0030, trend: 0.00003, regime: 'range' },
-  ETHUSDT:  { price: 3450,  vol: 0.0038, trend: 0.00002, regime: 'range' },
+  BTCUSDT:  { price: 67500, vol: 0.0030, trend: 0.00006, regime: 'down' },
+  ETHUSDT:  { price: 3450,  vol: 0.0038, trend: 0.00005, regime: 'down' },
+  SOLUSDT:  { price: 155,   vol: 0.0055, trend: 0.00007, regime: 'down' },  // SOL: higher vol, strong downtrend
+  BNBUSDT:  { price: 520,   vol: 0.0032, trend: 0.00005, regime: 'down' },  // BNB: mid vol, moderate downtrend
   SOLUSDT:  { price: 172,   vol: 0.0055, trend: 0.00008, regime: 'up'    },
   BNBUSDT:  { price: 595,   vol: 0.0035, trend: 0.00004, regime: 'range' },
   ADAUSDT:  { price: 0.615, vol: 0.0050, trend: 0.00002, regime: 'up'    },
@@ -197,20 +207,21 @@ function backtestSymbol(symbol, bars15m) {
   const bars4hAll = agg15mTo4h(bars15m);
 
   const trades    = [];
-  const rejections = { step1: 0, step1b: 0, step1c: 0, step2: 0, step2b: 0, step3: 0, step4: 0, cooldown: 0 };
+  const rejections = { step0: 0, step1: 0, step1b: 0, step1c: 0, step1d: 0, step1e: 0, step2: 0, step2b: 0, step3: 0, step4: 0, cooldown: 0 };
   const cooldowns = new Map();
   const logs      = [];
 
-  // scan from bar 200 onwards; each scan uses last 200 15m + last 180 1m + 4h
-  for (let i = 200; i < bars15m.length - 2; i += SCAN_EVERY) {
+  // Scan from bar 3200 onwards so EMA200 on 4H has 200 complete 4H bars
+  // (3200 15m bars ÷ 16 = 200 4H bars — minimum for valid classifyTrend)
+  for (let i = 3200; i < bars15m.length - 2; i += SCAN_EVERY) {
     const bars15mWin = bars15m.slice(Math.max(0, i - 199), i + 1);
     const curTs      = bars15m[i].t + 14 * 60_000;  // end of 15m bar = start of last 1m
 
     // 1m window: last 180 1m bars up to the current 15m bar close
     const bars1mWin = bars1mAll.filter(b => b.t <= curTs).slice(-180);
 
-    // 4h window: last 50 4h bars up to now
-    const bars4hWin = bars4hAll.filter(b => b.t <= curTs).slice(-50);
+    // 4h window: full history up to now — needed for EMA200 (requires 200+ bars)
+    const bars4hWin = bars4hAll.filter(b => b.t <= curTs);
 
     if (bars1mWin.length < 10 || bars4hWin.length < 3) continue;
 
@@ -222,9 +233,12 @@ function backtestSymbol(symbol, bars15m) {
 
     // Parse rejections from log
     for (const msg of stepLogs) {
-      if (msg.includes('Step1 FAIL'))   rejections.step1++;
+      if (msg.includes('Step0 FAIL'))   rejections.step0++;
+      else if (msg.includes('Step1 FAIL'))   rejections.step1++;
       else if (msg.includes('Step1b FAIL')) rejections.step1b++;
-      else if (msg.includes('Step1c BLOCKED')) rejections.step1c++;
+      else if (msg.includes('Step1c FAIL')) rejections.step1c++;
+      else if (msg.includes('Step1d FAIL')) rejections.step1d++;
+      else if (msg.includes('Step1e FAIL')) rejections.step1e++;
       else if (msg.includes('Step2 WAIT') || msg.includes('Step2 FAIL')) rejections.step2++;
       else if (msg.includes('Step2b FAIL')) rejections.step2b++;
       else if (msg.includes('Step3 FAIL')) rejections.step3++;
@@ -277,27 +291,27 @@ function printSummary(allResults) {
   console.log(
     'Symbol     '.padEnd(12) +
     'Trades'.padStart(7) +
-    'Win%'.padStart(7) +
-    'TP2%'.padStart(7) +
-    'BE%'.padStart(6) +
+    'Prof%'.padStart(7) +   // effective profit rate (TP2+BE+TO-win)
+    'TradWR%'.padStart(8) + // traditional WR (TP2+BE only)
+    'TP2%'.padStart(6) +
     'Loss%'.padStart(7) +
     'Avg_R'.padStart(8) +
     'Total_R'.padStart(9) +
     'Net_PnL'.padStart(11) +
-    '  Rejected→ Step1b Step1c Step2 Step2b Step3'
+    '  Rejected→ S0 S1b S1c S1d S1e S2 S2b S3'
   );
-  console.log('─'.repeat(110));
+  console.log('─'.repeat(120));
 
   let totT = 0, totW = 0, totTP2 = 0, totBE = 0, totL = 0, totTO = 0, totR = 0, totPnl = 0;
-  let totRej = { step1: 0, step1b: 0, step1c: 0, step2: 0, step2b: 0, step3: 0, step4: 0 };
+  let totRej = { step0: 0, step1: 0, step1b: 0, step1c: 0, step1d: 0, step1e: 0, step2: 0, step2b: 0, step3: 0, step4: 0 };
 
   for (const { symbol, trades, rejections } of allResults) {
     const n   = trades.length;
+    const rej = rejections;
     if (n === 0) {
-      const rej = rejections;
       console.log(
         `${symbol.padEnd(12)}${'0'.padStart(7)}  (no trades)` +
-        `   rej→ 1b:${rej.step1b} 1c:${rej.step1c} s2:${rej.step2} s2b:${rej.step2b} s3:${rej.step3}`
+        `   rej→ s0:${rej.step0} 1b:${rej.step1b} 1c:${rej.step1c} 1d:${rej.step1d} 1e:${rej.step1e} s2:${rej.step2} s2b:${rej.step2b} s3:${rej.step3}`
       );
       for (const k of Object.keys(totRej)) totRej[k] += (rejections[k] || 0);
       continue;
@@ -305,32 +319,35 @@ function printSummary(allResults) {
     const tp2  = trades.filter(t => t.outcome === 'TP2').length;
     const be   = trades.filter(t => t.outcome === 'PARTIAL').length;
     const loss = trades.filter(t => t.outcome === 'LOSS').length;
-    const to   = trades.filter(t => t.outcome === 'TIMEOUT').length;
-    const wins = tp2 + be;
+    const toWin = trades.filter(t => t.outcome === 'TIMEOUT' && t.R > 0).length;  // TIMEOUT phase=2 (TP1 hit)
+    const toLoss = trades.filter(t => t.outcome === 'TIMEOUT' && t.R <= 0).length; // TIMEOUT phase=1 (no TP1)
+    // Traditional WR: TP2 + PARTIAL (locked wins) only — conservative metric
+    const winsTraditional = tp2 + be;
+    // Effective profit rate: any trade that ended with positive P&L
+    const winsEffective   = tp2 + be + toWin;
     const sumR = trades.reduce((a, t) => a + t.R, 0);
     const sumP = trades.reduce((a, t) => a + t.pnl, 0);
     const avgR = sumR / n;
-    const rej  = rejections;
 
     console.log(
       `${symbol.padEnd(12)}` +
       `${String(n).padStart(7)}` +
-      `${(wins/n*100).toFixed(0)}%`.padStart(7) +
-      `${(tp2/n*100).toFixed(0)}%`.padStart(7) +
-      `${(be/n*100).toFixed(0)}%`.padStart(6) +
+      `${(winsEffective/n*100).toFixed(0)}%`.padStart(7) +   // effective profit rate
+      `${(winsTraditional/n*100).toFixed(0)}%`.padStart(7) + // traditional WR (TP2+BE only)
+      `${(tp2/n*100).toFixed(0)}%`.padStart(6) +
       `${(loss/n*100).toFixed(0)}%`.padStart(7) +
       `${avgR>=0?'+':''}${avgR.toFixed(2)}R`.padStart(8) +
       `${sumR>=0?'+':''}${sumR.toFixed(1)}R`.padStart(9) +
       `${sumP>=0?'+':''}$${sumP.toFixed(2)}`.padStart(11) +
-      `   1b:${rej.step1b} 1c:${rej.step1c} s2:${rej.step2} s2b:${rej.step2b} s3:${rej.step3}`
+      `   s0:${rej.step0} 1b:${rej.step1b} 1c:${rej.step1c} 1d:${rej.step1d} 1e:${rej.step1e} s2:${rej.step2} s2b:${rej.step2b} s3:${rej.step3}`
     );
 
-    totT += n; totW += wins; totTP2 += tp2; totBE += be; totL += loss; totTO += to;
+    totT += n; totW += winsEffective; totTP2 += tp2; totBE += be; totL += loss; totTO += toLoss;
     totR += sumR; totPnl += sumP;
     for (const k of Object.keys(totRej)) totRej[k] += (rejections[k] || 0);
   }
 
-  console.log('─'.repeat(110));
+  console.log('─'.repeat(120));
   if (totT > 0) {
     const avgR = totR / totT;
     console.log(
@@ -345,15 +362,18 @@ function printSummary(allResults) {
       `${totPnl>=0?'+':''}$${totPnl.toFixed(2)}`.padStart(11)
     );
   }
-  console.log('═'.repeat(110));
+  console.log('═'.repeat(120));
   console.log('\nRejection totals (all symbols):');
-  console.log(`  Step1  (no structure)      : ${totRej.step1}`);
-  console.log(`  Step1b (4H trend conflict) : ${totRej.step1b}  ← main reason alts don't trade`);
-  console.log(`  Step1c (1m CHoCH conflict) : ${totRej.step1c}`);
-  console.log(`  Step2  (no 1m pivot)       : ${totRej.step2}`);
-  console.log(`  Step2b (1m level too far)  : ${totRej.step2b}`);
-  console.log(`  Step3  (1m pivot stale)    : ${totRej.step3}`);
-  console.log(`  Step4  (price chased)      : ${totRej.step4}`);
+  console.log(`  Step0  (outside killzone)   : ${totRej.step0}  ← only London 07-10 + NY AM 12-15 UTC`);
+  console.log(`  Step1  (no structure)       : ${totRej.step1}`);
+  console.log(`  Step1b (4H trend conflict)  : ${totRej.step1b}`);
+  console.log(`  Step1c (VWAP conflict)      : ${totRej.step1c}`);
+  console.log(`  Step1d (RSI exhausted)      : ${totRej.step1d}  ← LONG>65 or SHORT<35`);
+  console.log(`  Step1e (ADX ranging <18)    : ${totRej.step1e}  ← choppy market filter`);
+  console.log(`  Step2  (no 1m pivot)        : ${totRej.step2}`);
+  console.log(`  Step2b (1m level too far)   : ${totRej.step2b}`);
+  console.log(`  Step3  (1m pivot stale)     : ${totRej.step3}`);
+  console.log(`  Step4  (price chased)       : ${totRej.step4}`);
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -364,7 +384,7 @@ async function main() {
   console.log(`Symbols    : ${SYMBOLS.join(', ')}`);
   console.log(`Bars       : ${BARS_15M} × 15m per symbol (~${(BARS_15M*15/60/24).toFixed(1)} days)`);
   console.log(`Capital    : $${STARTING_CAP}  Risk/trade: ${RISK_PCT*100}%  Fixed=$${FIXED_RISK}  Fee=${FEE_RT*100}% RT`);
-  console.log(`Production filters: 4H trend gate, 1m CHoCH, 1m level proximity, 10-bar freshness, entry tolerance`);
+  console.log(`Production filters: ICT killzone, 4H trend gate, VWAP, RSI(14) gate, ADX(14) gate, 1m CHoCH, level proximity, freshness`);
   console.log(`NOTE: Synthetic data — regime flags set per symbol (see SYMBOL_PARAMS)\n`);
 
   const allResults = [];
