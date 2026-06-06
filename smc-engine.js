@@ -2420,23 +2420,26 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   const price = cur.c;
 
   // ── STEP 0: ICT Killzone gate ────────────────────────────────────────────
-  // Only trade during institutional session windows — these sessions generate
-  // ~75% of all real intraday momentum. Outside them the market is thin/choppy:
-  //   London open:  07:00–10:00 UTC  (EU session, high liquidity + volatility)
-  //   NY AM open:   12:00–15:00 UTC  (NY/London overlap + NY open, highest volume)
+  // All 4 institutional sessions — LH/HL pivots form across the full day:
+  //   Asian:    02:00–06:00 UTC  (Asia session momentum)
+  //   London:   07:00–10:00 UTC  (EU open, high liquidity)
+  //   NY AM:    12:00–15:00 UTC  (NY/London overlap, highest volume)
+  //   NY PM:    18:30–21:00 UTC  (NY close push, end-of-day momentum)
   {
     const d = new Date(now);
-    const h = d.getUTCHours();
-    const inLondon = h >= 7  && h < 10;
-    const inNYAM   = h >= 12 && h < 15;
-    // Test override: allow extra sessions (e.g. London close 15-17)
+    const h = d.getUTCHours() + d.getUTCMinutes() / 60;
+    const inAsian  = h >= 2    && h < 6;
+    const inLondon = h >= 7    && h < 10;
+    const inNYAM   = h >= 12   && h < 15;
+    const inNYPM   = h >= 18.5 && h < 21;
+    // Test override: allow extra sessions
     const extraSessions = _testOverrides?.extraSessions || [];
     const inExtra = extraSessions.some(s => h >= s.start && h < s.end);
-    if (!inLondon && !inNYAM && !inExtra) {
-      L(`Step0 FAIL — outside killzone (${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC, need 07-10 or 12-15)`);
+    if (!inAsian && !inLondon && !inNYAM && !inNYPM && !inExtra) {
+      L(`Step0 FAIL — outside killzone (${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC, need 02-06/07-10/12-15/18:30-21)`);
       return null;
     }
-    const sessionName = inLondon ? 'London' : inNYAM ? 'NY AM' : `Extra(${h}h)`;
+    const sessionName = inAsian ? 'Asian' : inLondon ? 'London' : inNYAM ? 'NY AM' : inNYPM ? 'NY PM' : `Extra(${Math.floor(h)}h)`;
     L(`Step0 PASS ✓ — ${sessionName} killzone ${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')} UTC`);
   }
 
