@@ -2382,7 +2382,7 @@ function _detect15mPivot(ph15, pl15, bars15mLen) {
   return candidates[0];
 }
 
-function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
+async function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
   return scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log);
 }
 
@@ -2407,7 +2407,7 @@ function setTestOverrides(cfg) { _testOverrides = cfg || null; }
 // STEP 3 — Entry freshness:
 //   The 1m confirmation pivot must be within last 30 bars (30 min) from NOW.
 //   Prevents firing on a stale setup that matched hours ago.
-function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
+async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
   const L = (msg) => log && log(`[SMC-STEP] ${sym}: ${msg}`);
 
   const cfg = TRADING_CONFIG[sym];
@@ -2535,18 +2535,38 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
 
   L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
 
-  // ── Step 1b: 4H trend gate — strict directional filter ─────────────────
-  // UP trend   → LONG only  (no shorts, no exceptions)
-  // DOWN trend → SHORT only (no longs, no exceptions)
-  // NEUTRAL    → skip (no confirmed trend = no edge)
-  const isChochFlip = false;     // CHoCH bypass removed — trend is law
-  const isTrendStructure = false; // structure bypass removed — trend is law
+  // ── Step 1b: trend gate — 4H primary, 1H EMA50 for fast reversals ──────
+  // 4H EMA20/50/200 is the primary trend. BUT it is slow — after a CHoCH
+  // reversal the 4H takes hours to flip. So:
+  //   If 4H=DOWN but price > 1H EMA50 → trend reversing bullish → allow LONG
+  //   If 4H=UP   but price < 1H EMA50 → trend reversing bearish → allow SHORT
+  //   4H=NEUTRAL → use 1H EMA50 alone (above=LONG, below=SHORT)
+  const isChochFlip = false;
+  const isTrendStructure = false;
   let trend4h = 'NEUTRAL';
   try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}
-  if (trend4h === 'UP'   && dir !== 'LONG')  { L(`Step1b FAIL — 4H UP, LONG only (got ${dir})`);    return null; }
-  if (trend4h === 'DOWN' && dir !== 'SHORT') { L(`Step1b FAIL — 4H DOWN, SHORT only (got ${dir})`); return null; }
-  if (trend4h === 'NEUTRAL')                 { L(`Step1b FAIL — 4H NEUTRAL, no trade`);             return null; }
-  L(`Step1b PASS ✓ — 4H trend=${trend4h} → ${dir} ✓`);
+
+  // 1H EMA50 fast-flip: fetch last 60 1H bars and compute EMA50
+  let trendEffective = trend4h;
+  try {
+    const bars1h = await fetchCandles(cfg.iv === '15' ? sym : sym, '60', 60);
+    if (bars1h && bars1h.length >= 50) {
+      const ema1h = calcEMASeries(bars1h, 50);
+      const ema1hLast = ema1h[ema1h.length - 1];
+      if (ema1hLast !== null) {
+        const above1hEma = price > ema1hLast;
+        if (trend4h === 'DOWN' && above1hEma) trendEffective = 'UP';   // fast flip bullish
+        if (trend4h === 'UP'   && !above1hEma) trendEffective = 'DOWN'; // fast flip bearish
+        if (trend4h === 'NEUTRAL') trendEffective = above1hEma ? 'UP' : 'DOWN';
+        L(`Step1b 1H EMA50=${ema1hLast.toFixed(2)} price=${price.toFixed(2)} above=${above1hEma} → trend 4H=${trend4h} effective=${trendEffective}`);
+      }
+    }
+  } catch (_) {}
+
+  if (trendEffective === 'UP'      && dir !== 'LONG')  { L(`Step1b FAIL — trend UP, LONG only (got ${dir})`);    return null; }
+  if (trendEffective === 'DOWN'    && dir !== 'SHORT') { L(`Step1b FAIL — trend DOWN, SHORT only (got ${dir})`); return null; }
+  if (trendEffective === 'NEUTRAL')                    { L(`Step1b FAIL — trend NEUTRAL, no trade`);             return null; }
+  L(`Step1b PASS ✓ — trend=${trendEffective} (4H=${trend4h}) → ${dir} ✓`);
 
   // ── Step 1c: VWAP directional filter ────────────────────────────────────
   // Above VWAP = buy-side pressure → LONG only (block SHORTs)
