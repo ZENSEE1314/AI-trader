@@ -28,6 +28,7 @@ const { SMCProAgent }     = require('./smc-pro-agent');
 const { PolyBTCAgent }    = require('./poly-btc-agent');
 const { SMCPatternAgent } = require('./smc-pattern-agent');
 const { MarketDecisionAgent } = require('./market-decision-agent');
+const { SmartVisionAgent } = require('./smart-vision-agent');
 const { getAIChartLearner } = require('./ai-chart-learner');
 const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
@@ -68,6 +69,7 @@ class AgentCoordinator extends BaseAgent {
     this.smcPatternAgent  = new SMCPatternAgent(options);
     this.marketDecisionAgent = new MarketDecisionAgent(options);
     this.aiChartLearner   = getAIChartLearner(options);
+    this.smartVisionAgent = new SmartVisionAgent({ ...options, coordinator: this });
 
     // Agent registry — order matters for display
     this._agents = new Map();
@@ -87,6 +89,7 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('smc-pattern',  this.smcPatternAgent);
     this._agents.set('market-decision', this.marketDecisionAgent);
     this._agents.set('ai-learner',   this.aiChartLearner);
+    this._agents.set('smart-vision', this.smartVisionAgent);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
@@ -408,6 +411,12 @@ class AgentCoordinator extends BaseAgent {
     }, this.MICRO_CYCLE_MS);
 
     this.log('CEO always-on loop started (30s micro-cycles)');
+
+    // 24/7 SmartVisionAgent — self-ticking every 60s, Ollama AI + TradingView TA
+    this.smartVisionAgent.start().catch(err => {
+      this.logError(`SmartVisionAgent start failed: ${err.message}`);
+    });
+    this.log('SmartVisionAgent started — 24/7 AI trading active');
   }
 
   async _microCycle() {
