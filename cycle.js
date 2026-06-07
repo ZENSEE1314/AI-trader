@@ -642,6 +642,13 @@ async function calcCandleTrailSl(symbol, isLong, currentSlPrice) {
 // calculateTrailingStep / SAFETY_TRAIL_TRIGGER / SAFETY_TRAIL_LOCK
 // imported from trail-tiers.js above — single source of truth.
 
+// ── Serialize market_structure for DB (handles object or string) ─
+function serializeMS(ms) {
+  if (!ms) return null;
+  if (typeof ms === 'string') return ms;
+  try { return JSON.stringify(ms); } catch (_) { return null; }
+}
+
 // ── PROFIT SPLIT: Credit 60% user, 40% platform fee ─────────
 // Admin accounts are fully exempt — no platform fee, 100% profit recorded as theirs.
 async function recordProfitSplit(db, userId, apiKeyId, pnlUsdt, symbol) {
@@ -814,7 +821,7 @@ async function openTrade(client, pick, wallet) {
     tf15m: null,
     tf3m: pick.structure?.tf3m || null,
     tf1m: pick.structure?.tf1m || null,
-    marketStructure: pick.marketStructure || null,
+    marketStructure: serializeMS(pick.marketStructure),
     trailingSlPrice: initialSlPrice,
     trailingSlLastStep: 0,
     leverage,
@@ -2355,7 +2362,7 @@ async function executeForAllUsers(pick) {
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), bnTpRef, qty, userLev,
              fmtP(slPrice),
              null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-             pick.marketStructure || null, userTrailStep,
+             serializeMS(pick.marketStructure), userTrailStep,
              pick.setupName || pick.setup || null, bnTp2Ref]
           );
           userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} ${bnTpPrice ? `TP=$${fmtPrice(bnTpPrice)}` : `TP(ref)=$${fmtPrice(userTpPrice)}`}`);
@@ -2600,7 +2607,7 @@ async function executeForAllUsers(pick) {
                slFmtActual || 0, parseFloat(tpRef.toFixed(8)), qty, userLev,
                slFmtActual || 0,
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-               pick.marketStructure || null, userTrailStep, posId || null,
+               serializeMS(pick.marketStructure), userTrailStep, posId || null,
                pick.setupName || pick.setup || null, tp2Ref]
             );
             tradeDbInserted = true;
@@ -2659,7 +2666,7 @@ async function executeForAllUsers(pick) {
               [key.id, key.user_id, symbol, pick.direction, price,
                parseFloat((slPrice ?? 0).toFixed(8)), tp1Fb, qty, userLev, parseFloat((slPrice ?? 0).toFixed(8)),
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-               pick.marketStructure || null, userTrailStep,
+               serializeMS(pick.marketStructure), userTrailStep,
                pick.setupName || pick.setup || null, tp2Fb]
             );
             tradeDbInserted = true;

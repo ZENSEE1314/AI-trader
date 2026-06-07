@@ -455,6 +455,18 @@ class SmartVisionAgent extends BaseAgent {
       const tp1   = smcSignal?.tp1    || (dir === 'LONG' ? entry * (1 + slPct) : entry * (1 - slPct));
       const tp2   = smcSignal?.tp2    || (dir === 'LONG' ? entry * (1 + slPct * 2) : entry * (1 - slPct * 2));
 
+      // TV alignment key for storage
+      const sign  = dir === 'LONG' ? 1 : -1;
+      const tv15v = (tvScores?.['15m']?.All ?? 0) * sign;
+      const tv1hv = (tvScores?.['1h']?.All  ?? 0) * sign;
+      const tv4hv = (tvScores?.['4h']?.All  ?? 0) * sign;
+      const a15   = tv15v > 0.2; const a1h = tv1hv > 0.2; const a4h = tv4hv > 0.2;
+      const tvAlignKey = a15 && a1h && a4h ? 'all3'
+                       : a15 && a1h        ? '15_1h'
+                       : a1h && a4h        ? '1h_4h'
+                       : a15 && a4h        ? '15_4h'
+                       : a1h ? '1h' : a4h ? '4h' : a15 ? '15' : 'none';
+
       const signal = {
         symbol:    sym,
         direction: dir,
@@ -476,6 +488,21 @@ class SmartVisionAgent extends BaseAgent {
         rr:        tp2 && sl ? Math.abs(tp2 - entry) / Math.abs(sl - entry) : 2,
         ts:        now,
         signal:    `SmartVision ${dir} ${sym} score=${ai.score} | ${ai.reason}`,
+        // ── Indicator snapshot saved to DB market_structure ──
+        marketStructure: JSON.stringify({
+          pattern:    smcSignal?.pattern || 'AI-VISION',
+          trend4h,
+          trend:      trendEffective,
+          rsi:        rsi ? +rsi.toFixed(2) : null,
+          adx:        adx ? +adx.toFixed(2) : null,
+          tvAlign:    tvAlignKey,
+          tv15:       +(tvScores?.['15m']?.All ?? 0).toFixed(3),
+          tv1h:       +(tvScores?.['1h']?.All  ?? 0).toFixed(3),
+          tv4h:       +(tvScores?.['4h']?.All  ?? 0).toFixed(3),
+          above1hEma: above1hEma,
+          aiScore:    ai.score,
+          aiConf:     ai.confidence,
+        }),
       };
 
       bLog.trade(`[SmartVision] ✅ SIGNAL: ${sym} ${dir} entry=${entry.toFixed(2)} sl=${sl.toFixed(2)} tp2=${tp2.toFixed(2)} score=${ai.score} tags=${tags.slice(0,4).join(',')}`);

@@ -26,6 +26,10 @@ const {
   TRADING_CONFIG,
   scanNearestPivotMatch,
   checkTradeState,
+  calcRSI,
+  calcADX,
+  classifyTrend,
+  calcEMASeries,
 } = require('../smc-engine');
 
 // ── Constants ────────────────────────────────────────────────
@@ -309,6 +313,29 @@ class SMCPatternAgent extends BaseAgent {
 
         const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns, bLog.scan);
         if (!raw) return null;
+
+        // ── Attach indicator snapshot so DB trade history is rich ──
+        try {
+          const price    = bars1m[bars1m.length - 1]?.c || raw.price;
+          const trend4h  = classifyTrend(bars4h);
+          const ema1hSeries = calcEMASeries(bars1m, Math.min(50, bars1m.length - 1));
+          const ema1h    = ema1hSeries[ema1hSeries.length - 1];
+          const above1h  = ema1h !== null && price > ema1h;
+          const trendEff = trend4h === 'DOWN' && above1h  ? 'UP'
+                         : trend4h === 'UP'   && !above1h ? 'DOWN'
+                         : trend4h === 'NEUTRAL'          ? (above1h ? 'UP' : 'DOWN')
+                         : trend4h;
+          const rsi = calcRSI(bars15m, 14);
+          const adx = calcADX(bars4h,  14);
+          raw.marketStructure = JSON.stringify({
+            pattern:  raw.pattern,
+            trend4h,
+            trend:    trendEff,
+            rsi:      rsi ? +rsi.toFixed(2) : null,
+            adx:      adx ? +adx.toFixed(2) : null,
+            above1hEma: above1h,
+          });
+        } catch (_) {}
 
         bLog.scan(`[SMC-PAT] ${sym} SIGNAL: key=${raw.keyLevel?.toFixed(4)} 1m_piv=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
         return raw;
