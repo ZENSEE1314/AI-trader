@@ -175,4 +175,52 @@ router.get('/help', (req, res) => {
   });
 });
 
+// POST /api/tv-webhook/smc-pro
+// Dedicated endpoint for SMC Pro Suite Pine Script signals.
+// Uses `signal` field (LONG/SHORT) and sets override=true so the signal
+// bypasses the old internal gates — SMC Pro Suite already ran 6-factor
+// confluence analysis before firing, so no second-guessing needed.
+router.post('/smc-pro', (req, res) => {
+  const { signal, symbol = 'BTCUSDT', price, secret } = req.body || {};
+
+  // Normalise ticker — TradingView sends "BITUNIX:BTCUSDT.P"
+  const sym = (symbol || '').replace(/.*:/, '').replace(/[^A-Z]/g, '').replace('USDTP', 'USDT');
+
+  if (!ALLOWED_SYMBOLS.has(sym)) {
+    return res.status(400).json({ error: `Symbol ${sym} not in active list` });
+  }
+
+  const direction = (signal || '').toUpperCase();
+  if (direction !== 'LONG' && direction !== 'SHORT') {
+    return res.status(400).json({ error: 'signal must be LONG or SHORT' });
+  }
+
+  const entryPrice = parseFloat(price);
+  if (!entryPrice || entryPrice <= 0) {
+    return res.status(400).json({ error: 'Invalid price' });
+  }
+
+  const tvSignal = {
+    symbol:        sym,
+    side:          direction === 'LONG' ? 'BUY' : 'SELL',
+    direction,
+    price:         entryPrice,
+    zone:          'SMC_PRO',
+    pivot:         'SMC_PRO',
+    setup:         'SMC_PRO_SUITE',
+    setupName:     'SMC Pro Suite',
+    score:         999,
+    signalType:    `SMC-PRO-${direction}`,
+    source:        'smc-pro-suite',
+    isMomentumBreakout: true,  // override all internal gates
+    override:      true,
+    receivedAt:    Date.now(),
+  };
+
+  injectTVSignal(tvSignal);
+
+  console.log(`[SMC-Pro-Suite] ${sym} ${direction} @ ${entryPrice}`);
+  res.json({ ok: true, action: direction, symbol: sym, price: entryPrice });
+});
+
 module.exports = router;
