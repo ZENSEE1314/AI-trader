@@ -39,6 +39,18 @@ setInterval(cleanBotLogs, 6 * 60 * 60 * 1000); // every 6 hours
   }
 })();
 
+// Start SMC Pro Suite watcher — reads indicator signal live from TradingView
+// No webhook / no premium account needed. Fires trades when SIGNAL = LONG/SHORT.
+(async () => {
+  try {
+    const watcher = require('./agents/smc-suite-watcher');
+    await watcher.start();
+    console.log('[SERVER] SMC Pro Suite watcher started');
+  } catch (err) {
+    console.error('[SERVER] SMC Pro Suite watcher failed to start:', err.message);
+  }
+})();
+
 // Start 24/7 exhaustive strategy optimizer (background — non-blocking)
 (async () => {
   try {
