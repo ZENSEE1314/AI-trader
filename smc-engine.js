@@ -2541,47 +2541,84 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
   //   If 4H=DOWN but price > 1H EMA50 → trend reversing bullish → allow LONG
   //   If 4H=UP   but price < 1H EMA50 → trend reversing bearish → allow SHORT
   //   4H=NEUTRAL → use 1H EMA50 alone (above=LONG, below=SHORT)
+  //
+  // SMC structure override: if 15m pattern is HL (for LONG) or LH (for SHORT),
+  // the structure itself IS the trend signal — skip the EMA50 check.
+  // An HL by definition forms below EMA50; requiring price > EMA50 at the HL
+  // bottom kills the exact entries SMC is designed to catch.
   const isChochFlip = false;
   const isTrendStructure = false;
+
+  // SMC reversal labels — trust the 15m structure, bypass EMA50 gate
+  const isHLPattern = label && (label.includes('HL') || label.includes('HH'));  // uptrend structure
+  const isLHPattern = label && (label.includes('LH') || label.includes('LL'));  // downtrend structure
+  const structureMatchesDir = (dir === 'LONG' && isHLPattern) || (dir === 'SHORT' && isLHPattern);
+
   let trend4h = 'NEUTRAL';
   try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}
 
-  // 1H EMA50 fast-flip: fetch last 60 1H bars and compute EMA50
   let trendEffective = trend4h;
-  try {
-    const bars1h = await fetchCandles(cfg.iv === '15' ? sym : sym, '60', 60);
-    if (bars1h && bars1h.length >= 50) {
-      const ema1h = calcEMASeries(bars1h, 50);
-      const ema1hLast = ema1h[ema1h.length - 1];
-      if (ema1hLast !== null) {
-        const above1hEma = price > ema1hLast;
-        if (trend4h === 'DOWN' && above1hEma) trendEffective = 'UP';   // fast flip bullish
-        if (trend4h === 'UP'   && !above1hEma) trendEffective = 'DOWN'; // fast flip bearish
-        if (trend4h === 'NEUTRAL') trendEffective = above1hEma ? 'UP' : 'DOWN';
-        L(`Step1b 1H EMA50=${ema1hLast.toFixed(2)} price=${price.toFixed(2)} above=${above1hEma} → trend 4H=${trend4h} effective=${trendEffective}`);
-      }
-    }
-  } catch (_) {}
+  let above1hEma = null;
 
-  if (trendEffective === 'UP'      && dir !== 'LONG')  { L(`Step1b FAIL — trend UP, LONG only (got ${dir})`);    return null; }
-  if (trendEffective === 'DOWN'    && dir !== 'SHORT') { L(`Step1b FAIL — trend DOWN, SHORT only (got ${dir})`); return null; }
-  if (trendEffective === 'NEUTRAL')                    { L(`Step1b FAIL — trend NEUTRAL, no trade`);             return null; }
+  if (structureMatchesDir) {
+    // 15m structure already confirms direction — trust it.
+    // Still compute effective trend for logging/indicator snapshot but don't gate on it.
+    trendEffective = dir === 'LONG' ? 'UP' : 'DOWN';
+    L(`Step1b STRUCTURE OVERRIDE ✓ — 15m pattern "${label}" confirms ${dir}, skipping EMA50 gate`);
+  } else {
+    // No clear SMC structure match — use 1H EMA50 fast-flip as trend gate
+    try {
+      const bars1h = await fetchCandles(sym, '60', 60);
+      if (bars1h && bars1h.length >= 50) {
+        const ema1h = calcEMASeries(bars1h, 50);
+        const ema1hLast = ema1h[ema1h.length - 1];
+        if (ema1hLast !== null) {
+          above1hEma = price > ema1hLast;
+          if (trend4h === 'DOWN' && above1hEma)  trendEffective = 'UP';
+          if (trend4h === 'UP'   && !above1hEma) trendEffective = 'DOWN';
+          if (trend4h === 'NEUTRAL') trendEffective = above1hEma ? 'UP' : 'DOWN';
+          L(`Step1b 1H EMA50=${ema1hLast.toFixed(2)} price=${price.toFixed(2)} above=${above1hEma} → trend 4H=${trend4h} effective=${trendEffective}`);
+        }
+      }
+    } catch (_) {}
+
+    if (trendEffective === 'UP'      && dir !== 'LONG')  { L(`Step1b FAIL — trend UP, LONG only (got ${dir})`);    return null; }
+    if (trendEffective === 'DOWN'    && dir !== 'SHORT') { L(`Step1b FAIL — trend DOWN, SHORT only (got ${dir})`); return null; }
+    if (trendEffective === 'NEUTRAL')                    { L(`Step1b FAIL — trend NEUTRAL, no trade`);             return null; }
+  }
   L(`Step1b PASS ✓ — trend=${trendEffective} (4H=${trend4h}) → ${dir} ✓`);
 
   // ── Step 1c: VWAP directional filter ────────────────────────────────────
-  // Above VWAP = buy-side pressure → LONG only (block SHORTs)
-  // Below VWAP = sell-side pressure → SHORT only (block LONGs)
+  // Standard momentum: above VWAP → LONG, below VWAP → SHORT.
+  //
+  // SMC reversal exception: HL/LH entries are accumulation/distribution setups.
+  //   HL (LONG reversal) naturally forms BELOW VWAP — smart money accumulates
+  //   in the discount zone before pushing price up. Blocking it kills the best entries.
+  //   LH (SHORT reversal) naturally forms ABOVE VWAP — distribution zone.
+  //   So for reversal patterns: INVERT the VWAP expectation.
   if (_vwap !== null) {
     const aboveVwap = price >= _vwap;
-    if (dir === 'SHORT' && aboveVwap) {
-      L(`Step1c FAIL — price ${price.toFixed(2)} above VWAP ${_vwap.toFixed(2)}, SHORT blocked`);
-      return null;
+    if (structureMatchesDir) {
+      // Reversal pattern — HL should be below VWAP, LH should be above VWAP
+      const validReversalVwap = (dir === 'LONG' && !aboveVwap) || (dir === 'SHORT' && aboveVwap);
+      if (validReversalVwap) {
+        L(`Step1c PASS ✓ (reversal) — ${dir} at ${aboveVwap ? 'premium' : 'discount'} VWAP=${_vwap.toFixed(2)} price=${price.toFixed(2)} ✓ accumulation zone`);
+      } else {
+        // HL above VWAP or LH below VWAP — already past fair value, weaker setup but allow
+        L(`Step1c PASS (reversal, already extended) — ${dir} price=${price.toFixed(2)} VWAP=${_vwap.toFixed(2)}`);
+      }
+    } else {
+      // Momentum entry — must be on correct side of VWAP
+      if (dir === 'SHORT' && aboveVwap) {
+        L(`Step1c FAIL — price ${price.toFixed(2)} above VWAP ${_vwap.toFixed(2)}, SHORT blocked`);
+        return null;
+      }
+      if (dir === 'LONG' && !aboveVwap) {
+        L(`Step1c FAIL — price ${price.toFixed(2)} below VWAP ${_vwap.toFixed(2)}, LONG blocked`);
+        return null;
+      }
+      L(`Step1c PASS ✓ — VWAP=${_vwap.toFixed(2)} price=${price.toFixed(2)} bias=${aboveVwap ? 'LONG' : 'SHORT'} matches ${dir}`);
     }
-    if (dir === 'LONG' && !aboveVwap) {
-      L(`Step1c FAIL — price ${price.toFixed(2)} below VWAP ${_vwap.toFixed(2)}, LONG blocked`);
-      return null;
-    }
-    L(`Step1c PASS ✓ — VWAP=${_vwap.toFixed(2)} price=${price.toFixed(2)} bias=${aboveVwap ? 'LONG' : 'SHORT'} matches ${dir}`);
   }
   // ── Step 1d: RSI momentum gate ──────────────────────────────────────────
   // Block entries when the 15m move is already exhausted:
