@@ -1679,14 +1679,33 @@ router.get('/open-positions', async (req, res) => {
       } catch (_) {} // Key-level errors are non-fatal
     }));
 
-    // 3. Fetch live prices from Binance (fastest public endpoint)
+    // 3. Fetch live prices — try Binance futures first, then Bybit spot as fallback
     let priceMap = {};
+    const fetch = require('node-fetch');
+    // Binance futures (covers Binance positions)
     try {
-      const fetch = require('node-fetch');
       const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/price', { timeout: 8000 });
       const tickers = await r.json();
-      for (const t of tickers) priceMap[t.symbol] = parseFloat(t.price);
-    } catch {}
+      if (Array.isArray(tickers)) {
+        for (const t of tickers) priceMap[t.symbol] = parseFloat(t.price);
+      }
+    } catch (_) {}
+    // Bybit spot (covers BTCUSDT, ETHUSDT etc — same symbols used by Bitunix)
+    try {
+      const r = await fetch('https://api.bybit.com/v5/market/tickers?category=linear', { timeout: 8000 });
+      const j = await r.json();
+      for (const t of (j?.result?.list || [])) {
+        if (!priceMap[t.symbol]) priceMap[t.symbol] = parseFloat(t.lastPrice);
+      }
+    } catch (_) {}
+    // Bitunix public mark price (direct source for Bitunix positions)
+    try {
+      const r = await fetch('https://fapi.bitunix.com/api/v1/futures/market/trading_pairs', { timeout: 8000 });
+      const j = await r.json();
+      for (const t of (j?.data || [])) {
+        if (t.symbol && t.last_price) priceMap[t.symbol] = parseFloat(t.last_price);
+      }
+    } catch (_) {}
 
     function buildPosition(t, overrides = {}) {
       const entry    = overrides.entry    ?? (parseFloat(t.entry_price) || 0);
