@@ -2549,10 +2549,18 @@ async function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log =
   const isChochFlip = false;
   const isTrendStructure = false;
 
-  // SMC reversal labels — trust the 15m structure, bypass EMA50 gate
-  const isHLPattern = label && (label.includes('HL') || label.includes('HH'));  // uptrend structure
-  const isLHPattern = label && (label.includes('LH') || label.includes('LL'));  // downtrend structure
-  const structureMatchesDir = (dir === 'LONG' && isHLPattern) || (dir === 'SHORT' && isLHPattern);
+  // Which patterns can bypass EMA50 + VWAP gates:
+  //
+  //   HH→HL LONG  ✅ bypass — uptrend continuation. HL always forms below EMA50/VWAP.
+  //   LH→HL LONG  ✅ bypass — CHoCH bullish reversal. HL in discount zone.
+  //   LL→LH SHORT ✅ bypass — downtrend continuation. LH always forms above EMA50/VWAP.
+  //
+  //   HL→LH SHORT ❌ NO bypass — CHoCH bearish. Price bounced from HL then made LH.
+  //                  In an uptrend (HH→HL→HH), HL→LH is just noise/pullback — NOT a short.
+  //                  Must pass EMA50 gate to confirm trend is genuinely reversing.
+  const isLongBypass  = dir === 'LONG'  && (label === 'HH→HL' || label === 'LH→HL');
+  const isShortBypass = dir === 'SHORT' && (label === 'LL→LH');  // HL→LH must prove downtrend via EMA50
+  const structureMatchesDir = isLongBypass || isShortBypass;
 
   let trend4h = 'NEUTRAL';
   try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}

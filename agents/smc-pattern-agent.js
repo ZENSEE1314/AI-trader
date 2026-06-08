@@ -31,6 +31,28 @@ const {
   classifyTrend,
   calcEMASeries,
 } = require('../smc-engine');
+const { getTA } = require('@mathieuc/tradingview');
+
+// ── TradingView TA confirmation ───────────────────────────────
+// Fetches TV TA scores for 15m and 1h. Returns { bull, bear, neutral }
+// bull  = TV says both 15m AND 1h are bullish (All score > 0)
+// bear  = TV says both 15m AND 1h are bearish (All score < 0)
+// neutral = mixed / unavailable
+const TV_EXCHANGE = {
+  BTCUSDT: 'BINANCE:BTCUSDT', ETHUSDT: 'BINANCE:ETHUSDT',
+  SOLUSDT: 'BINANCE:SOLUSDT', BNBUSDT: 'BINANCE:BNBUSDT',
+};
+async function tvBias(sym) {
+  try {
+    const data = await getTA(TV_EXCHANGE[sym] || `BINANCE:${sym}`, '15');
+    if (!data) return 'neutral';
+    const s15 = data['15']?.All ?? 0;
+    const s1h  = data['60']?.All ?? 0;
+    if (s15 > 0 && s1h > 0) return 'bull';
+    if (s15 < 0 && s1h < 0) return 'bear';
+    return 'neutral';
+  } catch (_) { return 'neutral'; }
+}
 
 // ── Constants ────────────────────────────────────────────────
 const SCAN_INTERVAL_MS = 30_000;    // 30s scan cadence
@@ -313,6 +335,21 @@ class SMCPatternAgent extends BaseAgent {
 
         const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns, bLog.scan);
         if (!raw) return null;
+
+        // ── TradingView bias gate ──────────────────────────────
+        // TV 15m+1h must agree with the signal direction.
+        // If TV says bullish → no SHORT. If TV says bearish → no LONG.
+        // This catches false pivot detections that don't match real chart structure.
+        const tv = await tvBias(sym);
+        if (raw.dir === 'SHORT' && tv === 'bull') {
+          bLog.scan(`[SMC-PAT] ${sym} SHORT blocked — TradingView 15m+1h BULLISH (TV overrides internal pivot)`);
+          return null;
+        }
+        if (raw.dir === 'LONG' && tv === 'bear') {
+          bLog.scan(`[SMC-PAT] ${sym} LONG blocked — TradingView 15m+1h BEARISH (TV overrides internal pivot)`);
+          return null;
+        }
+        bLog.scan(`[SMC-PAT] ${sym} TV bias=${tv} dir=${raw.dir} ✓ aligned`);
 
         // ── Attach indicator snapshot so DB trade history is rich ──
         try {
