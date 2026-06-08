@@ -162,7 +162,7 @@ function checkWinnerGate(tags, profile) {
   return { allow: true, reason: `winner tags: ${winnerHits.join(', ')}` };
 }
 
-// ── TradingView TA fetcher ────────────────────────────────────
+// ── TradingView TA fetcher (multi-TF scores) ─────────────────
 async function fetchTVScores(tvSymbol) {
   try {
     const data = await getTA(tvSymbol, '15');
@@ -175,6 +175,37 @@ async function fetchTVScores(tvSymbol) {
       '4h':  data['240'] || null,
       '1D':  data['1D']  || null,
     };
+  } catch (_) { return null; }
+}
+
+// ── TradingView indicators via screener API (EMA20/50/200, RSI, ADX, VWAP) ──
+// Same data source as the TradingView MCP tool — gives higher-TF context.
+async function fetchTVIndicators(tvSymbol) {
+  try {
+    const res = await new Promise((resolve, reject) => {
+      const body = JSON.stringify({
+        symbols: { tickers: [tvSymbol], query: { types: [] } },
+        columns: ['EMA20', 'EMA50', 'EMA200', 'RSI', 'ADX', 'VWAP', 'close'],
+      });
+      const req = https.request({
+        hostname: 'scanner.tradingview.com',
+        path:     '/crypto/scan',
+        method:   'POST',
+        headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        timeout:  8000,
+      }, res => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+      req.write(body);
+      req.end();
+    });
+    const row = res?.data?.[0]?.d;
+    if (!row) return null;
+    return { ema20: row[0], ema50: row[1], ema200: row[2], rsi: row[3], adx: row[4], vwap: row[5], close: row[6] };
   } catch (_) { return null; }
 }
 
@@ -215,6 +246,14 @@ Analyze this market snapshot and decide: LONG, SHORT, or WAIT.
 SYMBOL: ${context.symbol}
 PRICE: ${context.price}
 TIME (UTC): ${context.timeUTC}
+
+TRADINGVIEW INDICATORS (from TradingView screener — primary source):
+  EMA20:  ${context.tvInd?.ema20?.toFixed(2)  || 'n/a'}  (price ${context.price > (context.tvInd?.ema20||0) ? 'ABOVE ✅' : 'BELOW ❌'})
+  EMA50:  ${context.tvInd?.ema50?.toFixed(2)  || 'n/a'}  (price ${context.price > (context.tvInd?.ema50||0) ? 'ABOVE ✅' : 'BELOW ❌'})
+  EMA200: ${context.tvInd?.ema200?.toFixed(2) || 'n/a'}  (price ${context.price > (context.tvInd?.ema200||0) ? 'ABOVE ✅' : 'BELOW ❌'})
+  RSI:    ${context.tvInd?.rsi?.toFixed(1)    || 'n/a'}
+  ADX:    ${context.tvInd?.adx?.toFixed(1)    || 'n/a'}
+  VWAP:   ${context.tvInd?.vwap?.toFixed(2)   || 'n/a'}  (price ${context.price > (context.tvInd?.vwap||0) ? 'ABOVE' : 'BELOW'})
 
 TRADINGVIEW TECHNICAL SCORES (positive=bullish, negative=bearish, ±2 = strong):
   1m:  ${context.tv?.['1m']?.All?.toFixed(3)  || 'n/a'}  MA: ${context.tv?.['1m']?.MA?.toFixed(2)  || 'n/a'}
@@ -377,12 +416,15 @@ class SmartVisionAgent extends BaseAgent {
       const cfg = TRADING_CONFIG[sym];
 
       // ── 1. Fetch market data in parallel ──────────────────
-      const [bars15m, bars4h, bars1m, bars1h, tvScores, liquidity] = await Promise.all([
+      // tvInd = EMA20/50/200 + RSI + ADX + VWAP from TradingView screener (primary trend source)
+      // tvScores = multi-TF TA scores from TradingView getTA() (15m/1h/4h direction)
+      const [bars15m, bars4h, bars1m, bars1h, tvScores, tvInd, liquidity] = await Promise.all([
         fetchCandles(sym, '15',  100),
         fetchCandles(sym, '240', 220),
         fetchCandles(sym, '1',    60),
         fetchCandles(sym, '60',   60),
         fetchTVScores(TV_EXCHANGE[sym]),
+        fetchTVIndicators(TV_EXCHANGE[sym]),
         checkLiquidity(sym),
       ]);
 
@@ -418,12 +460,17 @@ class SmartVisionAgent extends BaseAgent {
       const tv1h = tvScores?.['1h']?.All  ?? 0;
       const tvDir = (tv15 > 0 && tv1h > 0) ? 'LONG' : (tv15 < 0 && tv1h < 0) ? 'SHORT' : 'CONFLICT';
 
+      // Log TradingView indicators (primary source)
+      if (tvInd) {
+        bLog.scan(`[SmartVision] ${sym} TV EMA20=${tvInd.ema20?.toFixed(0)} EMA50=${tvInd.ema50?.toFixed(0)} EMA200=${tvInd.ema200?.toFixed(0)} RSI=${tvInd.rsi?.toFixed(1)} ADX=${tvInd.adx?.toFixed(1)} VWAP=${tvInd.vwap?.toFixed(0)}`);
+      }
       bLog.scan(`[SmartVision] ${sym} price=${price.toFixed(2)} trend=${trendEffective} TV15m=${tv15.toFixed(2)} TV1h=${tv1h.toFixed(2)} SMC=${smcSignal?.dir||'none'}`);
 
       // ── 7. Ask Ollama ─────────────────────────────────────
       const context = {
         symbol: sym, price, timeUTC,
         tv: tvScores,
+        tvInd,                  // EMA20/50/200 + RSI + ADX + VWAP direct from TradingView
         trend4h, trendEffective, above1hEma,
         rsi, adx,
         smcSignal,

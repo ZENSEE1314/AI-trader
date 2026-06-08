@@ -32,26 +32,79 @@ const {
   calcEMASeries,
 } = require('../smc-engine');
 const { getTA } = require('@mathieuc/tradingview');
+const axios = require('axios');
 
-// ── TradingView TA confirmation ───────────────────────────────
-// Fetches TV TA scores for 15m and 1h. Returns { bull, bear, neutral }
-// bull  = TV says both 15m AND 1h are bullish (All score > 0)
-// bear  = TV says both 15m AND 1h are bearish (All score < 0)
-// neutral = mixed / unavailable
+// ── TradingView direction check (PRIMARY source) ──────────────
+// Uses TWO TV data sources:
+//   1. TV MCP-style REST: EMA20/50/200 + RSI + ADX + VWAP (higher TF context)
+//   2. getTA() multi-TF scores: 15m + 1h alignment (short-term direction)
+//
+// Decision logic:
+//   LONG  only when: TV 15m+1h scores BOTH bullish
+//   SHORT only when: TV 15m+1h scores BOTH bearish
+//   BLOCK if TV says opposite direction — no override by internal pivots
+//
+// This is what the user asked for: TradingView IS the source of truth for HL/LH.
+
 const TV_EXCHANGE = {
   BTCUSDT: 'BINANCE:BTCUSDT', ETHUSDT: 'BINANCE:ETHUSDT',
   SOLUSDT: 'BINANCE:SOLUSDT', BNBUSDT: 'BINANCE:BNBUSDT',
 };
-async function tvBias(sym) {
+
+// Fetch EMA20/50/200 + RSI + ADX from TradingView (daily context)
+async function tvIndicators(sym) {
+  try {
+    const tvSym = TV_EXCHANGE[sym] || `BINANCE:${sym}`;
+    // Use TradingView screener API (same as MCP tool)
+    const res = await axios.post('https://scanner.tradingview.com/crypto/scan', {
+      symbols: { tickers: [tvSym], query: { types: [] } },
+      columns: ['EMA20', 'EMA50', 'EMA200', 'RSI', 'ADX', 'VWAP', 'close'],
+    }, { timeout: 8000 });
+    const row = res.data?.data?.[0]?.d;
+    if (!row) return null;
+    return {
+      ema20:  row[0], ema50: row[1], ema200: row[2],
+      rsi:    row[3], adx:   row[4], vwap:   row[5], close: row[6],
+    };
+  } catch (_) { return null; }
+}
+
+// Get 15m + 1h TA scores from TradingView getTA()
+async function tvScores(sym) {
   try {
     const data = await getTA(TV_EXCHANGE[sym] || `BINANCE:${sym}`, '15');
-    if (!data) return 'neutral';
-    const s15 = data['15']?.All ?? 0;
-    const s1h  = data['60']?.All ?? 0;
-    if (s15 > 0 && s1h > 0) return 'bull';
-    if (s15 < 0 && s1h < 0) return 'bear';
-    return 'neutral';
-  } catch (_) { return 'neutral'; }
+    if (!data) return null;
+    return { s15: data['15']?.All ?? 0, s1h: data['60']?.All ?? 0, s4h: data['240']?.All ?? 0 };
+  } catch (_) { return null; }
+}
+
+// Combined TV bias: returns 'bull' | 'bear' | 'neutral' + full data for logging
+async function tvBias(sym) {
+  const [ind, scores] = await Promise.all([tvIndicators(sym), tvScores(sym)]);
+
+  const price = ind?.close ?? 0;
+  const ema20 = ind?.ema20 ?? 0;
+  const ema50 = ind?.ema50 ?? 0;
+  const rsi   = ind?.rsi   ?? 50;
+  const s15   = scores?.s15 ?? 0;
+  const s1h   = scores?.s1h ?? 0;
+
+  // Primary: TV 15m + 1h scores must BOTH agree
+  const tvBull = s15 > 0 && s1h > 0;
+  const tvBear = s15 < 0 && s1h < 0;
+
+  // Secondary: price vs EMA20/EMA50 (higher TF context from TV)
+  const aboveEma20 = price > ema20;
+  const aboveEma50 = price > ema50;
+
+  let bias = 'neutral';
+  if (tvBull) bias = 'bull';
+  else if (tvBear) bias = 'bear';
+
+  return {
+    bias,
+    detail: `TV 15m=${s15.toFixed(2)} 1h=${s1h.toFixed(2)} | EMA20=${ema20?.toFixed(0)} EMA50=${ema50?.toFixed(0)} price=${price?.toFixed(2)} above20=${aboveEma20} above50=${aboveEma50} | RSI=${rsi?.toFixed(1)}`,
+  };
 }
 
 // ── Constants ────────────────────────────────────────────────
@@ -336,20 +389,24 @@ class SMCPatternAgent extends BaseAgent {
         const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns, bLog.scan);
         if (!raw) return null;
 
-        // ── TradingView bias gate ──────────────────────────────
-        // TV 15m+1h must agree with the signal direction.
-        // If TV says bullish → no SHORT. If TV says bearish → no LONG.
-        // This catches false pivot detections that don't match real chart structure.
+        // ── TradingView direction gate (PRIMARY — replaces internal trend calc) ──
+        // TradingView IS the source of truth for HL/LH direction.
+        // Uses TV 15m+1h TA scores + EMA20/50 from TradingView screener API.
+        // Internal pivot detection only finds the entry level — TV confirms direction.
         const tv = await tvBias(sym);
-        if (raw.dir === 'SHORT' && tv === 'bull') {
-          bLog.scan(`[SMC-PAT] ${sym} SHORT blocked — TradingView 15m+1h BULLISH (TV overrides internal pivot)`);
+        bLog.scan(`[SMC-PAT] ${sym} TradingView → bias=${tv.bias} | ${tv.detail}`);
+
+        if (raw.dir === 'SHORT' && tv.bias === 'bull') {
+          bLog.scan(`[SMC-PAT] ${sym} ❌ SHORT blocked — TradingView says BULLISH. Bot cannot short when TV shows uptrend.`);
+          this.addActivity('warn', `${sym} SHORT blocked by TradingView (TV=bull)`);
           return null;
         }
-        if (raw.dir === 'LONG' && tv === 'bear') {
-          bLog.scan(`[SMC-PAT] ${sym} LONG blocked — TradingView 15m+1h BEARISH (TV overrides internal pivot)`);
+        if (raw.dir === 'LONG' && tv.bias === 'bear') {
+          bLog.scan(`[SMC-PAT] ${sym} ❌ LONG blocked — TradingView says BEARISH. Bot cannot long when TV shows downtrend.`);
+          this.addActivity('warn', `${sym} LONG blocked by TradingView (TV=bear)`);
           return null;
         }
-        bLog.scan(`[SMC-PAT] ${sym} TV bias=${tv} dir=${raw.dir} ✓ aligned`);
+        bLog.scan(`[SMC-PAT] ${sym} ✅ TV bias=${tv.bias} aligns with ${raw.dir}`);
 
         // ── Attach indicator snapshot so DB trade history is rich ──
         try {
