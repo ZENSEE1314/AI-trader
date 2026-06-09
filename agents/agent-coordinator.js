@@ -474,12 +474,10 @@ class AgentCoordinator extends BaseAgent {
     // 6b. SMC Pro Agent — DISABLED: only SMCPatternAgent (15m+1m rule) trades
     // this.smcProAgent.execute({ coordinator: this }).catch(() => {});
 
-    // 6c. SMC Pattern Agent — SOLE trading engine: 15min HIGH/LOW + 1min HIGH/LOW
-    if (!this.smcPatternAgent.paused) {
-      this.smcPatternAgent.execute({ coordinator: this }).catch(err => {
-        this.addActivity('error', `SMC Pattern scan error: ${err.message}`);
-      });
-    }
+    // 6c. SMC Pattern Agent — DISABLED: signals now come from Pine Suite watcher only
+    // Internal LH/HL detection doesn't match TradingView chart — replaced by
+    // smc-suite-watcher.js which reads the actual Pine Script indicator live.
+    // this.smcPatternAgent.execute({ coordinator: this }).catch(() => {});
 
     // 6d. PolyBTC Agent — Polymarket prediction market (separate from futures, keep running)
     if (!this.polyBtcAgent.paused) {
