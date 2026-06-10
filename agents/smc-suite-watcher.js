@@ -15,7 +15,7 @@
 
 const TradingView = require('@mathieuc/tradingview');
 const { injectTVSignal } = require('../cycle');
-const { log: bLog } = require('../bot-logger');
+const bLog = (...args) => console.log('[SMC-Watcher]', ...args);
 
 // ── Config ──────────────────────────────────────────────────
 const SYMBOLS   = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT.P'];
