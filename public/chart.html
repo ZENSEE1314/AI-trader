@@ -1555,7 +1555,7 @@
 
       var interval = TV_INTERVAL_MAP[chartIntervals[idx]] || '15';
 
-      tvWidgets[idx] = new TradingView.widget({
+      var w = new TradingView.widget({
         autosize: true,
         symbol: tvSymbol(),
         interval: interval,
@@ -1582,6 +1582,14 @@
           'Volume@tv-basicstudies',
         ],
       });
+
+      w.onChartReady(function() {
+        w.chart().createStudy('SMC Pro Suite', false, false, {}, null, function(id) {
+          if (!id) console.warn('[MCT] SMC Pro Suite not found — check it is published on TradingView');
+        });
+      });
+
+      tvWidgets[idx] = w;
     }
 
     function createAllCharts() {
