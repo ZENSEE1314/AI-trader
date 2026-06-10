@@ -66,24 +66,18 @@ async function watchSymbol(tvTicker) {
     to:             undefined,
   });
 
-  // Search for the SMC Pro Suite indicator by name then load it
+  // Load SMC Pro Suite directly by its published script ID
   let indicator;
   try {
-    const results = await TradingView.searchIndicator('SMC Pro Suite');
-    bLog(`[SMC-Suite-Watcher][${sym}] Search returned ${results.length} results: ${results.slice(0,3).map(r=>`${r.name}(${r.access})`).join(', ')}`);
-    const match = results.find(r =>
-      r.name.toLowerCase().includes('smc pro suite')
-    );
-
+    const results = await TradingView.searchIndicator('PUB;bYcO0i9T');
+    const match = results[0];
     if (!match) {
-      bLog(`[SMC-Suite-Watcher][${sym}] Could not find "SMC Pro Suite" indicator on TradingView. ` +
-           `Make sure it is saved as a published/private indicator on your account.`);
+      bLog(`[SMC-Suite-Watcher][${sym}] Could not load PUB;bYcO0i9T — retrying in 60s`);
       client.end();
-      setTimeout(() => watchSymbol(tvTicker), 120_000);
+      setTimeout(() => watchSymbol(tvTicker), 60_000);
       return;
     }
-
-    bLog(`[SMC-Suite-Watcher][${sym}] Found indicator: ${match.name} (${match.id})`);
+    bLog(`[SMC-Suite-Watcher][${sym}] Loaded: ${match.name} (${match.id})`);
     indicator = await match.get();
   } catch (err) {
     bLog(`[SMC-Suite-Watcher][${sym}] Failed to load indicator: ${err.message}`);
