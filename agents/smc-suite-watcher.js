@@ -70,7 +70,7 @@ async function watchSymbol(tvTicker) {
   let indicator;
   try {
     indicator = await TradingView.getIndicator(
-      'PUB;bYcO0i9T',
+      'USER;5c16ebbf6afb4746a8fc0b693cc3a834',
       'last',
       process.env.TV_SESSION      || '',
       process.env.TV_SESSION_SIGN || '',
