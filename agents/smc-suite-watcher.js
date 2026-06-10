@@ -66,21 +66,18 @@ async function watchSymbol(tvTicker) {
     to:             undefined,
   });
 
-  // Load SMC Pro Suite directly by its published script ID
+  // Load SMC Pro Suite directly by published script ID using TV session
   let indicator;
   try {
-    const results = await TradingView.searchIndicator('PUB;bYcO0i9T');
-    const match = results[0];
-    if (!match) {
-      bLog(`[SMC-Suite-Watcher][${sym}] Could not load PUB;bYcO0i9T — retrying in 60s`);
-      client.end();
-      setTimeout(() => watchSymbol(tvTicker), 60_000);
-      return;
-    }
-    bLog(`[SMC-Suite-Watcher][${sym}] Loaded: ${match.name} (${match.id})`);
-    indicator = await match.get();
+    indicator = await TradingView.getIndicator(
+      'PUB;bYcO0i9T',
+      'last',
+      process.env.TV_SESSION      || '',
+      process.env.TV_SESSION_SIGN || '',
+    );
+    bLog(`[SMC-Suite-Watcher][${sym}] Loaded: ${indicator.description || indicator.name || 'SMC Pro Suite'}`);
   } catch (err) {
-    bLog(`[SMC-Suite-Watcher][${sym}] Failed to load indicator: ${err.message}`);
+    bLog(`[SMC-Suite-Watcher][${sym}] Failed to load indicator: ${err.message} — retrying in 60s`);
     client.end();
     setTimeout(() => watchSymbol(tvTicker), 60_000);
     return;
