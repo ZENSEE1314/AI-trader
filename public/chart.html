@@ -1573,6 +1573,14 @@
         show_popup_button: true,
         popup_width: '1000',
         popup_height: '650',
+        studies: [
+          'VWAP@tv-basicstudies',
+          { id: 'MAExp@tv-basicstudies', inputs: { length: 200 } },
+          { id: 'MAExp@tv-basicstudies', inputs: { length: 50 } },
+          'RSI@tv-basicstudies',
+          'MACD@tv-basicstudies',
+          'Volume@tv-basicstudies',
+        ],
       });
     }
 
