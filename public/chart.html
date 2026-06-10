@@ -1,15 +1,15 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MCT — SMC Chart</title>
+  <title>MCT â€” SMC Chart</title>
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;500;700&family=IBM+Plex+Sans:wght@200;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/tokens.css">
-  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://s3.tradingview.com/tv.js"></script>
 
   <style>
     /* --- Reset --- */
@@ -1087,7 +1087,7 @@
         <div class="indicator-dropdown" id="indicator-dropdown">
           <div class="ind-dropdown-header">Indicators</div>
           <div class="ind-section-label">Built-in</div>
-          <label class="ind-toggle"><input type="checkbox" data-ind="vwap" checked><span class="ind-name">VWAP + 2σ</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="vwap" checked><span class="ind-name">VWAP + 2Ïƒ</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="smcpro" checked><span class="ind-name">SMC Pro</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="volume" checked><span class="ind-name">Volume</span><span class="ind-slider"></span></label>
           <div class="ind-dropdown-footer">
@@ -1246,15 +1246,12 @@
 
   <script>
     // ============================================================
-    // MCT SMC Chart -- Custom Lightweight Charts Pro Widget
+    // MCT Chart â€” TradingView Advanced Chart Widget
     // ============================================================
 
-    // Load saved chart settings or use defaults
     function loadChartSettings() {
       var saved = localStorage.getItem('mct_chart_settings');
-      if (saved) {
-        try { return JSON.parse(saved); } catch (_) {}
-      }
+      if (saved) { try { return JSON.parse(saved); } catch (_) {} }
       return null;
     }
     function saveChartSettings() {
@@ -1283,36 +1280,6 @@
     var CHART_COUNT = (_saved && _saved.layout) || 3;
     var chartIntervals = (_saved && _saved.panelIntervals) || ['1', '3', '15'];
 
-    // Binance kline interval mapping (panel TF data-tv -> Binance interval string)
-    var TV_TO_BINANCE = {
-      '1': '1m', '3': '3m', '5': '5m', '15': '15m',
-      '30': '30m', '60': '1h', '240': '4h', 'D': '1d', 'W': '1w',
-    };
-
-    // Per-panel chart state
-    var chartPanels = [];
-    for (var _i = 0; _i < CHART_COUNT; _i++) {
-      chartPanels.push({
-        chart: null,
-        candleSeries: null,
-        volumeSeries: null,
-        overlaySeries: [],
-        subCharts: [],
-        candles: [],
-      });
-    }
-
-    // Candle data cache — interval-aware TTL so 1m candles are always fresh
-    var candleCache = new Map();
-    var CACHE_TTL_MAP = { '1m': 12000, '3m': 25000, '5m': 40000 };
-    function getCacheTTL(interval) { return CACHE_TTL_MAP[interval] || 60000; }
-
-    // Debounce/throttle helpers
-    var _recreateTimer = null;
-    var _chartCreating = false;
-    var _lastIndicatorApply = [0, 0, 0]; // timestamp per panel
-
-    // --- DOM References ---
     var DOM = {
       coinList: document.getElementById('coin-list'),
       coinLoading: document.getElementById('coin-loading'),
@@ -1349,1211 +1316,8 @@
     }
 
     // ============================================================
-    // Indicator Calculation Engine
+    // Data Fetching
     // ============================================================
-
-    var Calc = {
-      sma: function(src, period) {
-        var result = [];
-        for (var i = 0; i < src.length; i++) {
-          if (i < period - 1) { result.push(null); continue; }
-          var sum = 0;
-          for (var j = i - period + 1; j <= i; j++) sum += src[j];
-          result.push(sum / period);
-        }
-        return result;
-      },
-
-      ema: function(src, period) {
-        var result = [];
-        var k = 2 / (period + 1);
-        var prev = null;
-        for (var i = 0; i < src.length; i++) {
-          if (prev === null) {
-            if (i < period - 1) { result.push(null); continue; }
-            var sum = 0;
-            for (var j = i - period + 1; j <= i; j++) sum += src[j];
-            prev = sum / period;
-          } else {
-            prev = src[i] * k + prev * (1 - k);
-          }
-          result.push(prev);
-        }
-        return result;
-      },
-
-      rsi: function(src, period) {
-        var result = [];
-        var gains = [], losses = [];
-        for (var i = 0; i < src.length; i++) {
-          if (i === 0) { result.push(null); continue; }
-          var change = src[i] - src[i - 1];
-          gains.push(change > 0 ? change : 0);
-          losses.push(change < 0 ? -change : 0);
-
-          if (i < period) { result.push(null); continue; }
-
-          var avgGain, avgLoss;
-          if (i === period) {
-            avgGain = 0; avgLoss = 0;
-            for (var j = 0; j < period; j++) { avgGain += gains[j]; avgLoss += losses[j]; }
-            avgGain /= period; avgLoss /= period;
-          } else {
-            avgGain = (result._ag * (period - 1) + gains[gains.length - 1]) / period;
-            avgLoss = (result._al * (period - 1) + losses[losses.length - 1]) / period;
-          }
-          result._ag = avgGain;
-          result._al = avgLoss;
-          var rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-          result.push(100 - (100 / (1 + rs)));
-        }
-        return result;
-      },
-
-      macd: function(src, fast, slow, signal) {
-        var emaFast = Calc.ema(src, fast);
-        var emaSlow = Calc.ema(src, slow);
-        var macdLine = [];
-        for (var i = 0; i < src.length; i++) {
-          if (emaFast[i] === null || emaSlow[i] === null) { macdLine.push(null); continue; }
-          macdLine.push(emaFast[i] - emaSlow[i]);
-        }
-        var validMacd = macdLine.filter(function(v) { return v !== null; });
-        var signalLine = Calc.ema(validMacd, signal);
-        var sigIdx = 0;
-        var fullSignal = [];
-        var histogram = [];
-        for (var i = 0; i < macdLine.length; i++) {
-          if (macdLine[i] === null) { fullSignal.push(null); histogram.push(null); continue; }
-          var sv = signalLine[sigIdx++];
-          fullSignal.push(sv);
-          histogram.push(sv !== null ? macdLine[i] - sv : null);
-        }
-        return { macd: macdLine, signal: fullSignal, histogram: histogram };
-      },
-
-      bollingerBands: function(src, period, mult) {
-        var sma = Calc.sma(src, period);
-        var upper = [], lower = [];
-        for (var i = 0; i < src.length; i++) {
-          if (sma[i] === null) { upper.push(null); lower.push(null); continue; }
-          var sum = 0;
-          for (var j = i - period + 1; j <= i; j++) sum += Math.pow(src[j] - sma[i], 2);
-          var std = Math.sqrt(sum / period);
-          upper.push(sma[i] + mult * std);
-          lower.push(sma[i] - mult * std);
-        }
-        return { upper: upper, middle: sma, lower: lower };
-      },
-
-      // VWAP with daily 2σ bands — matches strategy-v4-smc.js exactly.
-      // Returns { vwap, upper2, lower2 } arrays for chart rendering.
-      vwap: function(candles) {
-        var vwapArr = [], upper2Arr = [], lower2Arr = [];
-        var cumVol = 0, cumTP = 0, cumTP2 = 0;
-        var dayStart = null;
-        for (var i = 0; i < candles.length; i++) {
-          var c = candles[i];
-          var d = new Date(c.time * 1000);
-          var day = d.getUTCFullYear() * 10000 + d.getUTCMonth() * 100 + d.getUTCDate();
-          if (day !== dayStart) { cumVol = 0; cumTP = 0; cumTP2 = 0; dayStart = day; }
-          var tp = (c.high + c.low + c.close) / 3;
-          cumVol += c.volume;
-          cumTP  += tp * c.volume;
-          cumTP2 += tp * tp * c.volume;
-          var vwapVal = cumVol > 0 ? cumTP / cumVol : c.close;
-          var variance = cumVol > 0 ? Math.max(0, cumTP2 / cumVol - vwapVal * vwapVal) : 0;
-          var std = Math.sqrt(variance);
-          vwapArr.push(vwapVal);
-          upper2Arr.push(vwapVal + 2 * std);
-          lower2Arr.push(vwapVal - 2 * std);
-        }
-        return { vwap: vwapArr, upper2: upper2Arr, lower2: lower2Arr };
-      },
-
-      atr: function(candles, period) {
-        var result = [];
-        var trs = [];
-        for (var i = 0; i < candles.length; i++) {
-          if (i === 0) { trs.push(candles[i].high - candles[i].low); result.push(null); continue; }
-          var tr = Math.max(
-            candles[i].high - candles[i].low,
-            Math.abs(candles[i].high - candles[i - 1].close),
-            Math.abs(candles[i].low - candles[i - 1].close)
-          );
-          trs.push(tr);
-          if (i < period) { result.push(null); continue; }
-          if (i === period) {
-            var sum = 0; for (var j = 0; j < period; j++) sum += trs[i - j]; result.push(sum / period);
-          } else {
-            result.push((result[i - 1] * (period - 1) + tr) / period);
-          }
-        }
-        return result;
-      },
-
-      supertrend: function(candles, period, mult) {
-        var atr = Calc.atr(candles, period);
-        var result = [], direction = [];
-        var upperBand = 0, lowerBand = 0, prevDir = 1;
-        for (var i = 0; i < candles.length; i++) {
-          if (atr[i] === null) { result.push(null); direction.push(1); continue; }
-          var hl2 = (candles[i].high + candles[i].low) / 2;
-          var up = hl2 - mult * atr[i];
-          var dn = hl2 + mult * atr[i];
-          if (i > 0 && result[i - 1] !== null) {
-            up = (up > lowerBand || candles[i - 1].close < lowerBand) ? up : lowerBand;
-            dn = (dn < upperBand || candles[i - 1].close > upperBand) ? dn : upperBand;
-          }
-          lowerBand = up; upperBand = dn;
-          var dir;
-          if (prevDir === 1 && candles[i].close < lowerBand) dir = -1;
-          else if (prevDir === -1 && candles[i].close > upperBand) dir = 1;
-          else dir = prevDir;
-          prevDir = dir;
-          result.push(dir === 1 ? lowerBand : upperBand);
-          direction.push(dir);
-        }
-        return { value: result, direction: direction };
-      },
-
-      stochastic: function(candles, kPeriod, dPeriod, smooth) {
-        var kRaw = [];
-        for (var i = 0; i < candles.length; i++) {
-          if (i < kPeriod - 1) { kRaw.push(null); continue; }
-          var highest = -Infinity, lowest = Infinity;
-          for (var j = i - kPeriod + 1; j <= i; j++) {
-            if (candles[j].high > highest) highest = candles[j].high;
-            if (candles[j].low < lowest) lowest = candles[j].low;
-          }
-          kRaw.push(highest === lowest ? 50 : ((candles[i].close - lowest) / (highest - lowest)) * 100);
-        }
-        var validK = kRaw.filter(function(v) { return v !== null; });
-        var kSmoothed = smooth > 1 ? Calc.sma(validK, smooth) : validK;
-        var d = Calc.sma(kSmoothed.filter(function(v) { return v !== null; }), dPeriod);
-        return { k: kRaw, d: d };
-      },
-
-      obv: function(candles) {
-        var result = [0];
-        for (var i = 1; i < candles.length; i++) {
-          if (candles[i].close > candles[i - 1].close) result.push(result[i - 1] + candles[i].volume);
-          else if (candles[i].close < candles[i - 1].close) result.push(result[i - 1] - candles[i].volume);
-          else result.push(result[i - 1]);
-        }
-        return result;
-      },
-
-      mfi: function(candles, period) {
-        var result = [];
-        for (var i = 0; i < candles.length; i++) {
-          if (i < period) { result.push(null); continue; }
-          var posFlow = 0, negFlow = 0;
-          for (var j = i - period + 1; j <= i; j++) {
-            var tp = (candles[j].high + candles[j].low + candles[j].close) / 3;
-            var prevTp = j > 0 ? (candles[j - 1].high + candles[j - 1].low + candles[j - 1].close) / 3 : tp;
-            var mf = tp * candles[j].volume;
-            if (tp > prevTp) posFlow += mf; else negFlow += mf;
-          }
-          result.push(negFlow === 0 ? 100 : 100 - (100 / (1 + posFlow / negFlow)));
-        }
-        return result;
-      },
-
-      cci: function(candles, period) {
-        var tps = candles.map(function(c) { return (c.high + c.low + c.close) / 3; });
-        var sma = Calc.sma(tps, period);
-        var result = [];
-        for (var i = 0; i < candles.length; i++) {
-          if (sma[i] === null) { result.push(null); continue; }
-          var md = 0;
-          for (var j = i - period + 1; j <= i; j++) md += Math.abs(tps[j] - sma[i]);
-          md /= period;
-          result.push(md === 0 ? 0 : (tps[i] - sma[i]) / (0.015 * md));
-        }
-        return result;
-      },
-
-      momentum: function(src, period) {
-        var result = [];
-        for (var i = 0; i < src.length; i++) {
-          result.push(i < period ? null : src[i] - src[i - period]);
-        }
-        return result;
-      },
-
-      wma: function(src, period) {
-        var result = [];
-        var denom = period * (period + 1) / 2;
-        for (var i = 0; i < src.length; i++) {
-          if (i < period - 1) { result.push(null); continue; }
-          var sum = 0;
-          for (var j = 0; j < period; j++) sum += src[i - j] * (period - j);
-          result.push(sum / denom);
-        }
-        return result;
-      },
-
-      hma: function(src, period) {
-        var halfWma = Calc.wma(src, Math.floor(period / 2));
-        var fullWma = Calc.wma(src, period);
-        var diff = [];
-        for (var i = 0; i < src.length; i++) {
-          diff.push(halfWma[i] !== null && fullWma[i] !== null ? 2 * halfWma[i] - fullWma[i] : null);
-        }
-        var validDiff = diff.filter(function(v) { return v !== null; });
-        return Calc.wma(validDiff, Math.floor(Math.sqrt(period)));
-      },
-
-      donchian: function(candles, period) {
-        var upper = [], lower = [], mid = [];
-        for (var i = 0; i < candles.length; i++) {
-          if (i < period - 1) { upper.push(null); lower.push(null); mid.push(null); continue; }
-          var hi = -Infinity, lo = Infinity;
-          for (var j = i - period + 1; j <= i; j++) {
-            if (candles[j].high > hi) hi = candles[j].high;
-            if (candles[j].low < lo) lo = candles[j].low;
-          }
-          upper.push(hi); lower.push(lo); mid.push((hi + lo) / 2);
-        }
-        return { upper: upper, middle: mid, lower: lower };
-      },
-
-      ichimoku: function(candles, tenkan, kijun, senkou, displacement) {
-        function donch(len, i) {
-          if (i < len - 1) return null;
-          var hi = -Infinity, lo = Infinity;
-          for (var j = i - len + 1; j <= i; j++) {
-            if (candles[j].high > hi) hi = candles[j].high;
-            if (candles[j].low < lo) lo = candles[j].low;
-          }
-          return (hi + lo) / 2;
-        }
-        var tenkanSen = [], kijunSen = [], senkouA = [], senkouB = [], chikou = [];
-        for (var i = 0; i < candles.length; i++) {
-          tenkanSen.push(donch(tenkan, i));
-          kijunSen.push(donch(kijun, i));
-          var sa = (tenkanSen[i] !== null && kijunSen[i] !== null) ? (tenkanSen[i] + kijunSen[i]) / 2 : null;
-          senkouA.push(sa);
-          senkouB.push(donch(senkou, i));
-          chikou.push(candles[i].close);
-        }
-        return { tenkan: tenkanSen, kijun: kijunSen, senkouA: senkouA, senkouB: senkouB, chikou: chikou, displacement: displacement };
-      },
-
-      psar: function(candles, step, max) {
-        step = step || 0.02; max = max || 0.2;
-        var result = [];
-        if (candles.length < 2) return result;
-        var isLong = candles[1].close > candles[0].close;
-        var af = step;
-        var ep = isLong ? candles[0].high : candles[0].low;
-        var sar = isLong ? candles[0].low : candles[0].high;
-        result.push(sar);
-        for (var i = 1; i < candles.length; i++) {
-          var prevSar = sar;
-          sar = prevSar + af * (ep - prevSar);
-          if (isLong) {
-            sar = Math.min(sar, candles[i - 1].low, i > 1 ? candles[i - 2].low : candles[i - 1].low);
-            if (candles[i].low < sar) { isLong = false; sar = ep; ep = candles[i].low; af = step; }
-            else { if (candles[i].high > ep) { ep = candles[i].high; af = Math.min(af + step, max); } }
-          } else {
-            sar = Math.max(sar, candles[i - 1].high, i > 1 ? candles[i - 2].high : candles[i - 1].high);
-            if (candles[i].high > sar) { isLong = true; sar = ep; ep = candles[i].high; af = step; }
-            else { if (candles[i].low < ep) { ep = candles[i].low; af = Math.min(af + step, max); } }
-          }
-          result.push(sar);
-        }
-        return result;
-      },
-
-      trendStructure: function(candles, lbL, lbR) {
-        lbL = lbL || 5; lbR = lbR || 2; // right lookback=2 for near-real-time detection
-        // Detect pivot highs and lows
-        var pivotHighs = [], pivotLows = [];
-        for (var i = lbL; i < candles.length - lbR; i++) {
-          var isHigh = true, isLow = true;
-          for (var j = 1; j <= lbL; j++) {
-            if (candles[i].high <= candles[i - j].high) isHigh = false;
-            if (candles[i].low >= candles[i - j].low) isLow = false;
-          }
-          for (var j = 1; j <= lbR; j++) {
-            if (candles[i].high <= candles[i + j].high) isHigh = false;
-            if (candles[i].low >= candles[i + j].low) isLow = false;
-          }
-          if (isHigh) pivotHighs.push({ idx: i, price: candles[i].high, time: candles[i].time });
-          if (isLow) pivotLows.push({ idx: i, price: candles[i].low, time: candles[i].time });
-        }
-
-        // Track trend state
-        var trend = []; // per-bar trend: 'up', 'down', or 'none'
-        var trendLines = [];
-        var markers = [];
-        var lastPH = null, prevPH = null, lastPL = null, prevPL = null;
-        var phIdx = 0, plIdx = 0;
-        var currentTrend = 'none';
-
-        for (var i = 0; i < candles.length; i++) {
-          // Check if a pivot high was confirmed at this bar (pivot detected at i - lbR)
-          if (phIdx < pivotHighs.length && pivotHighs[phIdx].idx + lbR === i) {
-            prevPH = lastPH;
-            lastPH = pivotHighs[phIdx];
-            phIdx++;
-          }
-          if (plIdx < pivotLows.length && pivotLows[plIdx].idx + lbR === i) {
-            prevPL = lastPL;
-            lastPL = pivotLows[plIdx];
-            plIdx++;
-          }
-
-          var prevTrend = currentTrend;
-          if (lastPH && prevPH && lastPL && prevPL) {
-            var isHH = lastPH.price > prevPH.price;
-            var isHL = lastPL.price > prevPL.price;
-            var isLH = lastPH.price < prevPH.price;
-            var isLL = lastPL.price < prevPL.price;
-            if (isHL && isHH) currentTrend = 'up';
-            else if (isLH && isLL) currentTrend = 'down';
-          }
-
-          trend.push(currentTrend);
-
-          // Trend change markers
-          if (currentTrend !== prevTrend) {
-            if (currentTrend === 'up') {
-              markers.push({ time: candles[i].time, position: 'belowBar', color: '#34d399', shape: 'arrowUp', text: 'Bull' });
-            } else if (currentTrend === 'down') {
-              markers.push({ time: candles[i].time, position: 'aboveBar', color: '#f43f5e', shape: 'arrowDown', text: 'Bear' });
-            }
-          }
-
-          // Draw trend lines when new pivots are confirmed
-          if (currentTrend === 'up' && lastPL && prevPL && lastPL !== prevPL) {
-            var exists = trendLines.some(function(tl) { return tl.t1 === prevPL.time && tl.t2 === lastPL.time; });
-            if (!exists) trendLines.push({ t1: prevPL.time, p1: prevPL.price, t2: lastPL.time, p2: lastPL.price, color: '#34d399' });
-          }
-          if (currentTrend === 'down' && lastPH && prevPH && lastPH !== prevPH) {
-            var exists = trendLines.some(function(tl) { return tl.t1 === prevPH.time && tl.t2 === lastPH.time; });
-            if (!exists) trendLines.push({ t1: prevPH.time, p1: prevPH.price, t2: lastPH.time, p2: lastPH.price, color: '#f43f5e' });
-          }
-        }
-
-        return { trend: trend, trendLines: trendLines, markers: markers };
-      },
-
-      // SMC Pro — Zeiierman-style full SMC indicator (clean, selective)
-      smcPro: function(candles, lbL, lbR) {
-        lbL = lbL || 5; lbR = lbR || 1; // lbR=1 — label appears on the bar right after the pivot
-        var EQL_THRESHOLD = 0.0004; // 0.04% tolerance — very strict equal highs/lows
-        var pivotHighs = [], pivotLows = [];
-        for (var i = lbL; i < candles.length - lbR; i++) {
-          var isHigh = true, isLow = true;
-          for (var j = 1; j <= lbL; j++) {
-            if (candles[i].high <= candles[i - j].high) isHigh = false;
-            if (candles[i].low >= candles[i - j].low) isLow = false;
-          }
-          for (var j = 1; j <= lbR; j++) {
-            if (candles[i].high <= candles[i + j].high) isHigh = false;
-            if (candles[i].low >= candles[i + j].low) isLow = false;
-          }
-          if (isHigh) pivotHighs.push({ idx: i, price: candles[i].high, time: candles[i].time });
-          if (isLow) pivotLows.push({ idx: i, price: candles[i].low, time: candles[i].time });
-        }
-
-        // Build alternating swing sequence (high-low-high-low)
-        var allPivots = [];
-        pivotHighs.forEach(function(p) { allPivots.push({ type: 'high', idx: p.idx, price: p.price, time: p.time }); });
-        pivotLows.forEach(function(p) { allPivots.push({ type: 'low', idx: p.idx, price: p.price, time: p.time }); });
-        allPivots.sort(function(a, b) { return a.idx - b.idx; });
-
-        // Deduplicate: keep only alternating highs and lows
-        var swings = [];
-        for (var i = 0; i < allPivots.length; i++) {
-          if (swings.length === 0) { swings.push(allPivots[i]); continue; }
-          var last = swings[swings.length - 1];
-          if (allPivots[i].type === last.type) {
-            // Same type: keep the more extreme one
-            if (allPivots[i].type === 'high' && allPivots[i].price > last.price) swings[swings.length - 1] = allPivots[i];
-            if (allPivots[i].type === 'low' && allPivots[i].price < last.price) swings[swings.length - 1] = allPivots[i];
-          } else {
-            swings.push(allPivots[i]);
-          }
-        }
-
-        var markers = [];
-        var swingLines = [];
-        var lastHigh = null, lastLow = null;
-        var structureBreaks = [];
-        var currentTrend = 'none';
-        var trendZones = [];
-        var zoneStart = 0;
-        var eqlLines = [];
-        var labeledHighs = [];
-        var labeledLows = [];
-
-        for (var si = 0; si < swings.length; si++) {
-          var s = swings[si];
-          if (s.type === 'high') {
-            var label = '';
-            if (lastHigh) {
-              label = s.price > lastHigh.price ? 'HH' : 'LH';
-              // Only draw swing connector for the last few swings (reduce clutter)
-              if (si >= swings.length - 12) {
-                swingLines.push({ t1: lastHigh.time, p1: lastHigh.price, t2: s.time, p2: s.price, color: label === 'HH' ? 'rgba(52,211,153,0.5)' : 'rgba(244,63,94,0.5)' });
-              }
-              // EQH detection
-              var diff = Math.abs(s.price - lastHigh.price) / lastHigh.price;
-              if (diff < EQL_THRESHOLD) {
-                eqlLines.push({ price: (s.price + lastHigh.price) / 2, t1: lastHigh.time, t2: s.time, type: 'EQH' });
-              }
-            }
-            if (label) {
-              markers.push({ time: s.time, position: 'aboveBar', color: label === 'HH' ? '#34d399' : '#f43f5e', shape: 'circle', text: label });
-              labeledHighs.push({ time: s.time, idx: s.idx, price: s.price, label: label });
-            }
-            // Structure breaks
-            if (lastHigh && lastLow) {
-              if (label === 'LH' && currentTrend === 'up') {
-                structureBreaks.push({ time: s.time, idx: s.idx, price: lastHigh.price, type: 'CHoCH', dir: 'bear' });
-                var prevTrend = currentTrend; currentTrend = 'down';
-                trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx;
-              } else if (label === 'HH' && currentTrend !== 'up') {
-                structureBreaks.push({ time: s.time, idx: s.idx, price: lastHigh.price, type: 'BOS', dir: 'bull' });
-                var prevTrend = currentTrend; currentTrend = 'up';
-                if (prevTrend !== currentTrend) { trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx; }
-              }
-            }
-            lastHigh = s;
-          } else {
-            var label = '';
-            if (lastLow) {
-              label = s.price < lastLow.price ? 'LL' : 'HL';
-              if (si >= swings.length - 12) {
-                swingLines.push({ t1: lastLow.time, p1: lastLow.price, t2: s.time, p2: s.price, color: label === 'HL' ? 'rgba(52,211,153,0.5)' : 'rgba(244,63,94,0.5)' });
-              }
-              var diff = Math.abs(s.price - lastLow.price) / lastLow.price;
-              if (diff < EQL_THRESHOLD) {
-                eqlLines.push({ price: (s.price + lastLow.price) / 2, t1: lastLow.time, t2: s.time, type: 'EQL' });
-              }
-            }
-            if (label) {
-              markers.push({ time: s.time, position: 'belowBar', color: label === 'HL' ? '#34d399' : '#f43f5e', shape: 'circle', text: label });
-              labeledLows.push({ time: s.time, idx: s.idx, price: s.price, label: label });
-            }
-            if (lastLow && lastHigh) {
-              if (label === 'HL' && currentTrend === 'down') {
-                structureBreaks.push({ time: s.time, idx: s.idx, price: lastLow.price, type: 'CHoCH', dir: 'bull' });
-                var prevTrend = currentTrend; currentTrend = 'up';
-                trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx;
-              } else if (label === 'LL' && currentTrend !== 'down') {
-                structureBreaks.push({ time: s.time, idx: s.idx, price: lastLow.price, type: 'BMS', dir: 'bear' });
-                var prevTrend = currentTrend; currentTrend = 'down';
-                if (prevTrend !== currentTrend) { trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx; }
-              }
-            }
-            lastLow = s;
-          }
-        }
-        trendZones.push({ startIdx: zoneStart, endIdx: candles.length - 1, trend: currentTrend });
-
-        // Weak High / Strong Low — only the most recent unswept ones (max 2 each)
-        var weakStrongMarkers = [];
-        var lastPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
-        var whCount = 0, slCount = 0;
-
-        for (var hi = labeledHighs.length - 1; hi >= 0 && whCount < 2; hi--) {
-          var h = labeledHighs[hi];
-          var swept = false;
-          for (var ci = h.idx + 1; ci < candles.length; ci++) { if (candles[ci].high > h.price) { swept = true; break; } }
-          if (!swept && lastPrice < h.price) {
-            weakStrongMarkers.push({ time: h.time, price: h.price, text: 'Weak High', color: '#f43f5e', position: 'aboveBar' });
-            whCount++;
-          }
-        }
-        for (var li = labeledLows.length - 1; li >= 0 && slCount < 2; li--) {
-          var l = labeledLows[li];
-          var swept = false;
-          for (var ci = l.idx + 1; ci < candles.length; ci++) { if (candles[ci].low < l.price) { swept = true; break; } }
-          if (!swept && lastPrice > l.price) {
-            var isStrong = l.label === 'HL';
-            weakStrongMarkers.push({ time: l.time, price: l.price, text: isStrong ? 'Strong Low' : 'Weak Low', color: isStrong ? '#34d399' : '#fbbf24', position: 'belowBar' });
-            slCount++;
-          }
-        }
-
-        // PDH/PDL + PWH/PWL
-        var pdh = 0, pdl = Infinity, pwh = 0, pwl = Infinity;
-        var lastCandleTime = candles.length > 0 ? candles[candles.length - 1].time * 1000 : 0;
-        var today = new Date(lastCandleTime);
-        var todayStart = new Date(today); todayStart.setUTCHours(0,0,0,0);
-        var yesterdayStart = new Date(todayStart.getTime() - 86400000);
-        var dayOfWeek = todayStart.getUTCDay();
-        var mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-        var thisWeekStart = new Date(todayStart.getTime() - mondayOffset * 86400000);
-        var lastWeekStart = new Date(thisWeekStart.getTime() - 7 * 86400000);
-
-        for (var i = 0; i < candles.length; i++) {
-          var ct = candles[i].time * 1000;
-          if (ct >= yesterdayStart.getTime() && ct < todayStart.getTime()) {
-            if (candles[i].high > pdh) pdh = candles[i].high;
-            if (candles[i].low < pdl) pdl = candles[i].low;
-          }
-          if (ct >= lastWeekStart.getTime() && ct < thisWeekStart.getTime()) {
-            if (candles[i].high > pwh) pwh = candles[i].high;
-            if (candles[i].low < pwl) pwl = candles[i].low;
-          }
-        }
-        if (pdl === Infinity) pdl = 0;
-        if (pwl === Infinity) pwl = 0;
-
-        // Order Blocks — only from recent structure breaks (last 5)
-        var orderBlocks = [];
-        var recentBreaks = structureBreaks.slice(-5);
-        for (var bi = 0; bi < recentBreaks.length; bi++) {
-          var sb = recentBreaks[bi];
-          if (sb.type === 'BOS' || sb.type === 'BMS') {
-            var bIdx = sb.idx;
-            if (bIdx < 1) continue;
-            for (var ci = bIdx - 1; ci >= Math.max(0, bIdx - 5); ci--) {
-              var c = candles[ci];
-              if (sb.dir === 'bull' && c.close < c.open) {
-                orderBlocks.push({ startTime: c.time, endTime: candles[Math.min(candles.length - 1, bIdx + 15)].time, top: c.open, bottom: c.low, type: 'demand', startIdx: ci });
-                break;
-              }
-              if (sb.dir === 'bear' && c.close > c.open) {
-                orderBlocks.push({ startTime: c.time, endTime: candles[Math.min(candles.length - 1, bIdx + 15)].time, top: c.high, bottom: c.close, type: 'supply', startIdx: ci });
-                break;
-              }
-            }
-          }
-        }
-
-        // Range stats
-        var recentHighs = pivotHighs.slice(-3);
-        var recentLows = pivotLows.slice(-3);
-        var upperRange = 0, lowerRange = Infinity;
-        for (var i = 0; i < recentHighs.length; i++) { if (recentHighs[i].price > upperRange) upperRange = recentHighs[i].price; }
-        for (var i = 0; i < recentLows.length; i++) { if (recentLows[i].price < lowerRange) lowerRange = recentLows[i].price; }
-        if (lowerRange === Infinity) lowerRange = 0;
-        var midRange = (upperRange + lowerRange) / 2;
-
-        return {
-          markers: markers,
-          swingLines: swingLines,
-          structureBreaks: structureBreaks,
-          trendZones: [], // no background shading — keep chart clean
-          pdh: pdh, pdl: pdl,
-          pwh: pwh, pwl: pwl,
-          orderBlocks: orderBlocks,
-          currentTrend: currentTrend,
-          upperRange: upperRange,
-          lowerRange: lowerRange,
-          midRange: midRange,
-          eqlLines: eqlLines,
-          weakStrongMarkers: weakStrongMarkers,
-        };
-      },
-
-      dtfxZones: function(candles, structureLen, fibLevels) {
-        structureLen = structureLen || 10;
-        fibLevels = fibLevels || [0.3, 0.5, 0.7];
-
-        var markers = [];
-        var zones = [];
-        var dir = 0;
-        var tPrice = null, tBar = -1, prevTPrice = null;
-        var bPrice = null, bBar = -1, prevBPrice = null;
-        var bosUpCheck = false, bosDownCheck = false;
-        var lastTop = '', lastBot = '';
-        var tDir = 0;
-
-        for (var i = structureLen; i < candles.length; i++) {
-          // Calculate highest/lowest over structureLen bars
-          var upper = -Infinity, lower = Infinity;
-          for (var j = i - structureLen; j <= i; j++) {
-            if (candles[j].high > upper) upper = candles[j].high;
-            if (candles[j].low < lower) lower = candles[j].low;
-          }
-
-          var topConf = false, botConf = false;
-
-          if (dir >= 0 && candles[i - structureLen].high > upper) {
-            // Actually check if bar at i-structureLen was the highest
-            var isHighest = true;
-            for (var j = i - structureLen * 2; j <= i; j++) {
-              if (j < 0 || j === i - structureLen) continue;
-              if (j < candles.length && candles[j].high >= candles[i - structureLen].high) { isHighest = false; break; }
-            }
-            if (isHighest) { dir = -1; topConf = true; }
-          }
-
-          if (dir <= 0 && candles[i - structureLen].low < lower) {
-            var isLowest = true;
-            for (var j = i - structureLen * 2; j <= i; j++) {
-              if (j < 0 || j === i - structureLen) continue;
-              if (j < candles.length && candles[j].low <= candles[i - structureLen].low) { isLowest = false; break; }
-            }
-            if (isLowest) { dir = 1; botConf = true; }
-          }
-
-          // Use simpler pivot detection as fallback
-          if (!topConf && !botConf) {
-            var pivotIdx = i - structureLen;
-            if (pivotIdx >= structureLen && pivotIdx < candles.length - structureLen) {
-              var isPivotHigh = true, isPivotLow = true;
-              for (var j = 1; j <= structureLen; j++) {
-                if (pivotIdx - j >= 0 && candles[pivotIdx].high <= candles[pivotIdx - j].high) isPivotHigh = false;
-                if (pivotIdx + j < candles.length && candles[pivotIdx].high <= candles[pivotIdx + j].high) isPivotHigh = false;
-                if (pivotIdx - j >= 0 && candles[pivotIdx].low >= candles[pivotIdx - j].low) isPivotLow = false;
-                if (pivotIdx + j < candles.length && candles[pivotIdx].low >= candles[pivotIdx + j].low) isPivotLow = false;
-              }
-              if (isPivotHigh) { topConf = true; dir = -1; }
-              if (isPivotLow) { botConf = true; dir = 1; }
-            }
-          }
-
-          if (topConf) {
-            prevTPrice = tPrice;
-            tPrice = candles[i - structureLen].high;
-            tBar = i - structureLen;
-            bosUpCheck = true;
-
-            var label = '';
-            if (prevTPrice !== null) {
-              if (tPrice > prevTPrice) { label = 'HH'; lastTop = 'HH'; }
-              else if (tPrice < prevTPrice) { label = 'LH'; lastTop = 'LH'; }
-              else { label = lastTop || 'EQ'; }
-            }
-            if (label) {
-              markers.push({
-                time: candles[tBar].time, position: 'aboveBar',
-                color: label === 'HH' ? '#34d399' : '#f43f5e',
-                shape: 'circle', text: label,
-              });
-            }
-          }
-
-          if (botConf) {
-            prevBPrice = bPrice;
-            bPrice = candles[i - structureLen].low;
-            bBar = i - structureLen;
-            bosDownCheck = true;
-
-            var label = '';
-            if (prevBPrice !== null) {
-              if (bPrice > prevBPrice) { label = 'HL'; lastBot = 'HL'; }
-              else if (bPrice < prevBPrice) { label = 'LL'; lastBot = 'LL'; }
-              else { label = lastBot || 'EQ'; }
-            }
-            if (label) {
-              markers.push({
-                time: candles[bBar].time, position: 'belowBar',
-                color: label === 'HL' ? '#34d399' : '#f43f5e',
-                shape: 'circle', text: label,
-              });
-            }
-          }
-
-          // BOS / CHoCH detection
-          var close = candles[i].close;
-          var chochUp = tPrice !== null && close > tPrice && candles[i].high >= upper && tDir <= 0;
-          var chochDown = bPrice !== null && close < bPrice && candles[i].low <= lower && tDir >= 0;
-
-          if (chochUp) tDir = 1;
-          if (chochDown) tDir = -1;
-
-          var bosUp = tPrice !== null && close > tPrice && bosUpCheck && tDir >= 0;
-          var bosDown = bPrice !== null && close < bPrice && bosDownCheck && tDir <= 0;
-
-          var mssUp = bosUp || chochUp;
-          var mssDown = bosDown || chochDown;
-
-          if (mssUp && tBar >= 0) {
-            bosUpCheck = false;
-            var zoneTop = tPrice;
-            var zoneBot = dir === -1 ? lower : (bPrice || lower);
-            var fibs = fibLevels.map(function(fl) {
-              return zoneBot + (zoneTop - zoneBot) * fl;
-            });
-            zones.push({
-              type: 'bull', startTime: candles[tBar].time, endTime: candles[i].time,
-              top: zoneTop, bottom: zoneBot, fibs: fibs,
-            });
-          }
-
-          if (mssDown && bBar >= 0) {
-            bosDownCheck = false;
-            var zoneTop = dir === 1 ? upper : (tPrice || upper);
-            var zoneBot = bPrice;
-            var fibs = fibLevels.map(function(fl) {
-              return zoneTop - (zoneTop - zoneBot) * fl;
-            });
-            zones.push({
-              type: 'bear', startTime: candles[bBar].time, endTime: candles[i].time,
-              top: zoneTop, bottom: zoneBot, fibs: fibs,
-            });
-          }
-        }
-
-        return { markers: markers, zones: zones };
-      },
-
-      vsa: function(candles, minEffectBars, vmaPeriod, scanRange) {
-        minEffectBars = minEffectBars || 5;
-        vmaPeriod = vmaPeriod || 20;
-        scanRange = Math.min(scanRange || 500, candles.length - 1);
-
-        var vmaData = this.sma(candles.map(function(c) { return c.volume; }), vmaPeriod);
-        var boxes = [];
-        var efforts = [];
-
-        for (var i = vmaPeriod + 2; i < candles.length; i++) {
-          // Detect: volume crossed under vma at i-1 and still below at i
-          var prevVol = candles[i - 1].volume;
-          var prevPrevVol = candles[i - 2].volume;
-          var prevVma = vmaData[i - 1];
-          var prevPrevVma = vmaData[i - 2];
-          if (prevVma === null || prevPrevVma === null) continue;
-
-          var crossedUnder = prevPrevVol >= prevPrevVma && prevVol < prevVma;
-          if (!crossedUnder || candles[i].volume >= (vmaData[i] || 0)) continue;
-
-          // Scan backwards to collect volume event bars (where vol >= vma)
-          var volData = [];
-          var maxScan = Math.min(scanRange, i - 2);
-          for (var j = 2; j <= maxScan + 1; j++) {
-            var idx = i - j;
-            if (idx < 0) break;
-            volData.push({ vol: candles[idx].volume, vma: vmaData[idx] || 0, idx: idx });
-          }
-
-          // Filter: trim to first consecutive block above vma from the start
-          var filtered = [];
-          for (var k = 0; k < volData.length; k++) {
-            if (volData[k].vol < volData[k].vma) {
-              if (k + 1 < volData.length && volData[k + 1].vol < volData[k + 1].vma) break;
-            }
-            filtered.push(volData[k]);
-          }
-
-          if (filtered.length < minEffectBars) continue;
-
-          // Calculate box boundaries and effort
-          var startIdx = filtered[filtered.length - 1].idx;
-          var endIdx = i - 1;
-          var totalVol = 0;
-          var boxHigh = -Infinity;
-          var boxLow = Infinity;
-
-          for (var k = 0; k < filtered.length; k++) {
-            totalVol += filtered[k].vol;
-          }
-
-          for (var k = startIdx; k <= endIdx && k < candles.length; k++) {
-            if (candles[k].high > boxHigh) boxHigh = candles[k].high;
-            if (candles[k].low < boxLow) boxLow = candles[k].low;
-          }
-
-          var priceRange = Math.abs(candles[endIdx].close - candles[startIdx].open);
-          var effort = priceRange > 0 ? totalVol / priceRange : 0;
-          var isBull = candles[endIdx].close >= candles[startIdx].open;
-
-          // Divergence/convergence vs last effort
-          var signal = 'neutral';
-          if (efforts.length > 0) {
-            var lastEffort = efforts[efforts.length - 1];
-            if (effort > lastEffort) signal = 'divergence';
-            else if (effort < lastEffort) signal = 'convergence';
-          }
-
-          if (effort > 0) efforts.push(effort);
-
-          boxes.push({
-            startTime: candles[startIdx].time,
-            endTime: candles[endIdx].time,
-            high: boxHigh, low: boxLow,
-            isBull: isBull, signal: signal,
-          });
-        }
-
-        return { boxes: boxes, vma: vmaData };
-      },
-
-      // VSA Multi Volume Histogram — port of the MT4 "Better Volume" indicator
-      // Classifies each bar's volume into 6 signal types using vol×range and vol/range
-      // maPeriod: moving average for the volume baseline (default 100)
-      // lookback: window to find extreme vol×range and vol/range (default 20)
-      vsaHistogram: function(candles, maPeriod, lookback) {
-        maPeriod  = maPeriod  || 100;
-        lookback  = lookback  || 20;
-        var len   = candles.length;
-        var bars  = [];
-
-        // VSA colors keyed to the MQ4 original
-        var COLOR = {
-          red:     '#ef4444',   // Climax High   — start/end uptrend, pullback in downtrend
-          white:   '#e2e8f0',   // Climax Low    — start/end downtrend, pullback in uptrend
-          lime:    '#4ade80',   // High Churn    — profit-taking, end of up/down trend
-          magenta: '#e879f9',   // Climax Churn  — tops & bottoms, reversal or continuation
-          yellow:  '#facc15',   // Low Volume    — end of trend / pullback mid-trend
-          blue:    '#38bdf8',   // Neutral       — no signal
-        };
-
-        // Volume MA (simple, over maPeriod bars)
-        var vma = [];
-        for (var i = 0; i < len; i++) {
-          if (i < maPeriod - 1) { vma.push(null); continue; }
-          var sum = 0;
-          for (var k = i - maPeriod + 1; k <= i; k++) sum += candles[k].volume;
-          vma.push(sum / maPeriod);
-        }
-
-        for (var i = 0; i < len; i++) {
-          var c     = candles[i];
-          var vol   = c.volume;
-          var range = c.high - c.low;
-          var mid   = (c.high + c.low) / 2;
-
-          // Lowest volume in last 20 bars (inclusive)
-          var volLowest = Infinity;
-          for (var j = Math.max(0, i - 19); j <= i; j++) {
-            if (candles[j].volume < volLowest) volLowest = candles[j].volume;
-          }
-
-          // Highest vol×range and vol/range in lookback window
-          var hiValue2 = 0, hiValue3 = 0;
-          for (var j = Math.max(0, i - lookback + 1); j <= i; j++) {
-            var r = candles[j].high - candles[j].low;
-            if (r <= 0) continue;
-            var v2 = candles[j].volume * r;
-            var v3 = candles[j].volume / r;
-            if (v2 > hiValue2) hiValue2 = v2;
-            if (v3 > hiValue3) hiValue3 = v3;
-          }
-
-          var value2   = (range > 0) ? vol * range : 0;
-          var value3   = (range > 0) ? vol / range : 0;
-          var isClimax = (value2 > 0 && value2 === hiValue2);
-          var isChurn  = (value3 > 0 && value3 === hiValue3);
-          var aboveMid = c.close > mid;
-          var isLowest = (vol === volLowest);
-
-          // Priority: White > Magenta > Lime > Red > Yellow > Blue
-          var color;
-          if      (isClimax && !aboveMid)          color = COLOR.white;    // Climax Low
-          else if (isClimax && isChurn)             color = COLOR.magenta;  // Climax Churn
-          else if (isClimax && aboveMid)            color = COLOR.red;      // Climax High
-          else if (isChurn)                         color = COLOR.lime;     // High Churn
-          else if (isLowest)                        color = COLOR.yellow;   // Low Volume
-          else                                      color = COLOR.blue;     // Neutral
-
-          bars.push({ time: c.time, value: vol, color: color });
-        }
-
-        return { bars: bars, vma: vma, candles: candles };
-      },
-    };
-
-    // ============================================================
-    // Formula Parser -- parse expressions like ema(close, 50)
-    // ============================================================
-
-    var FormulaParser = {
-      PRESETS: {
-        'bollinger bands': 'bb(close, 20, 2)',
-        'supertrend': 'supertrend(10, 3)',
-        'stochastic': 'stoch(14, 3, 3)',
-        'atr': 'atr(14)',
-        'rsi': 'rsi(close, 14)',
-        'macd': 'macd(close, 12, 26, 9)',
-        'obv': 'obv()',
-        'mfi': 'mfi(14)',
-        'cci': 'cci(20)',
-        'momentum': 'momentum(close, 10)',
-        'parabolic sar': 'psar(0.02, 0.2)',
-        'ichimoku': 'ichimoku(9, 26, 52, 26)',
-        'donchian channels': 'donchian(20)',
-        'hull ma': 'hma(close, 9)',
-        'vwap': 'vwap()',
-        'volume': 'volume()',
-        'trend structure': 'trendstructure(5, 2)',
-        'trend lines': 'trendstructure(5, 2)',
-        'hh hl': 'trendstructure(5, 2)',
-        'lh ll': 'trendstructure(5, 2)',
-        'market structure': 'trendstructure(5, 2)',
-        'dtfx': 'dtfxzones(10)',
-        'dtfx zones': 'dtfxzones(10)',
-        'algo zones': 'dtfxzones(10)',
-        'dtfx algo': 'dtfxzones(10)',
-        'zones': 'dtfxzones(10)',
-        'smc pro': 'smcpro(5, 1)',
-        'smc': 'smcpro(5, 1)',
-        'zeiierman': 'smcpro(5, 1)',
-        'bos': 'smcpro(5, 1)',
-        'choch': 'smcpro(5, 1)',
-        'order block': 'smcpro(5, 1)',
-        'ob': 'smcpro(5, 1)',
-        'pdh pdl': 'smcpro(5, 1)',
-        'vsa': 'vsa(5, 20)',
-        'volume spread': 'vsa(5, 20)',
-        'volume spread analysis': 'vsa(5, 20)',
-        'vsa histogram': 'vsahistogram(100, 20)',
-        'better volume': 'vsahistogram(100, 20)',
-        'volume histogram': 'vsahistogram(100, 20)',
-      },
-
-      OVERLAY_FNS: ['ema', 'sma', 'wma', 'hma', 'vwap', 'bb', 'supertrend', 'psar', 'ichimoku', 'donchian', 'trendstructure', 'dtfxzones', 'vsa', 'smcpro'],
-      OSCILLATOR_FNS: ['rsi', 'macd', 'stoch', 'atr', 'obv', 'mfi', 'cci', 'momentum'],
-
-      parse: function(input) {
-        var lower = input.trim().toLowerCase();
-        if (this.PRESETS[lower]) input = this.PRESETS[lower];
-        else input = input.trim();
-
-        var match = input.match(/^(\w+)\s*\((.*)\)$/);
-        if (!match) return null;
-
-        var fn = match[1].toLowerCase();
-        var argsStr = match[2].trim();
-        var args = argsStr ? argsStr.split(',').map(function(a) {
-          a = a.trim();
-          var num = parseFloat(a);
-          return isNaN(num) ? a : num;
-        }) : [];
-
-        var type = this.OVERLAY_FNS.indexOf(fn) >= 0 ? 'overlay' : 'oscillator';
-        return { fn: fn, args: args, type: type, formula: input };
-      },
-
-      execute: function(parsed, candles) {
-        var closes = candles.map(function(c) { return c.close; });
-        var highs = candles.map(function(c) { return c.high; });
-        var lows = candles.map(function(c) { return c.low; });
-
-        function getSrc(name) {
-          if (name === 'high') return highs;
-          if (name === 'low') return lows;
-          if (name === 'open') return candles.map(function(c) { return c.open; });
-          if (name === 'volume') return candles.map(function(c) { return c.volume; });
-          if (name === 'hl2') return candles.map(function(c) { return (c.high + c.low) / 2; });
-          if (name === 'hlc3') return candles.map(function(c) { return (c.high + c.low + c.close) / 3; });
-          return closes;
-        }
-
-        var fn = parsed.fn;
-        var a = parsed.args;
-
-        switch (fn) {
-          case 'sma': return { type: 'overlay', label: 'SMA(' + (a[1] || 20) + ')', data: Calc.sma(getSrc(a[0] || 'close'), a[1] || 20), color: '#60a5fa' };
-          case 'ema': return { type: 'overlay', label: 'EMA(' + (a[1] || 20) + ')', data: Calc.ema(getSrc(a[0] || 'close'), a[1] || 20), color: '#fbbf24' };
-          case 'wma': return { type: 'overlay', label: 'WMA(' + (a[1] || 20) + ')', data: Calc.wma(getSrc(a[0] || 'close'), a[1] || 20), color: '#34d399' };
-          case 'hma': return { type: 'overlay', label: 'HMA(' + (a[1] || 9) + ')', data: Calc.hma(getSrc(a[0] || 'close'), a[1] || 9), color: '#e879f9' };
-          case 'vwap': {
-            var vd = Calc.vwap(candles);
-            return { type: 'overlay', label: 'VWAP+2σ', multi: [
-              { data: vd.upper2, color: 'rgba(244,63,94,0.85)',   label: 'VWAP+2σ', lineWidth: 1 },
-              { data: vd.vwap,   color: 'rgba(167,139,250,0.95)', label: 'VWAP',    lineWidth: 2 },
-              { data: vd.lower2, color: 'rgba(52,211,153,0.85)',  label: 'VWAP-2σ', lineWidth: 1 },
-            ]};
-          }
-          case 'volume': return { type: 'volume', label: 'Volume', data: candles };
-
-          case 'bb': {
-            var bb = Calc.bollingerBands(getSrc(a[0] || 'close'), a[1] || 20, a[2] || 2);
-            return { type: 'overlay', label: 'BB(' + (a[1] || 20) + ',' + (a[2] || 2) + ')', multi: [
-              { data: bb.upper, color: 'rgba(107,114,128,0.6)', label: 'BB Upper' },
-              { data: bb.middle, color: '#6b7280', label: 'BB Mid' },
-              { data: bb.lower, color: 'rgba(107,114,128,0.6)', label: 'BB Lower' },
-            ]};
-          }
-          case 'supertrend': {
-            var st = Calc.supertrend(candles, a[0] || 10, a[1] || 3);
-            return { type: 'overlay', label: 'ST(' + (a[0] || 10) + ',' + (a[1] || 3) + ')', coloredData: st };
-          }
-          case 'psar': {
-            var ps = Calc.psar(candles, a[0] || 0.02, a[1] || 0.2);
-            return { type: 'overlay', label: 'PSAR', data: ps, color: '#fbbf24', lineType: 'dots' };
-          }
-          case 'ichimoku': {
-            var ichi = Calc.ichimoku(candles, a[0] || 9, a[1] || 26, a[2] || 52, a[3] || 26);
-            return { type: 'overlay', label: 'Ichimoku', multi: [
-              { data: ichi.tenkan, color: '#60a5fa', label: 'Tenkan' },
-              { data: ichi.kijun, color: '#f43f5e', label: 'Kijun' },
-              { data: ichi.senkouA, color: 'rgba(52,211,153,0.5)', label: 'Senkou A' },
-              { data: ichi.senkouB, color: 'rgba(244,63,94,0.5)', label: 'Senkou B' },
-            ]};
-          }
-          case 'donchian': {
-            var dc = Calc.donchian(candles, a[0] || 20);
-            return { type: 'overlay', label: 'DC(' + (a[0] || 20) + ')', multi: [
-              { data: dc.upper, color: '#60a5fa', label: 'DC Upper' },
-              { data: dc.middle, color: '#6b7280', label: 'DC Mid' },
-              { data: dc.lower, color: '#f43f5e', label: 'DC Lower' },
-            ]};
-          }
-          case 'trendstructure': {
-            var ts = Calc.trendStructure(candles, a[0] || 5, a[1] || 2);
-            return { type: 'overlay', label: 'Trend Structure', trendStructureData: ts };
-          }
-          case 'dtfxzones': {
-            var dz = Calc.dtfxZones(candles, a[0] || 10);
-            return { type: 'overlay', label: 'DTFX Zones', dtfxData: dz };
-          }
-          case 'vsa': {
-            var vsaResult = Calc.vsa(candles, a[0] || 5, a[1] || 20);
-            return { type: 'overlay', label: 'VSA', vsaData: vsaResult };
-          }
-          case 'vsahistogram': {
-            var vh = Calc.vsaHistogram(candles, a[0] || 100, a[1] || 20);
-            return { type: 'vsahistogram', label: 'VSA Histogram', vsaHistData: vh };
-          }
-          case 'smcpro': {
-            var sp = Calc.smcPro(candles, a[0] || 5, a[1] || 1);
-            return { type: 'overlay', label: 'SMC Pro', smcProData: sp };
-          }
-
-          case 'rsi': return { type: 'oscillator', label: 'RSI(' + (a[1] || 14) + ')', data: Calc.rsi(getSrc(a[0] || 'close'), a[1] || 14), color: '#a78bfa', range: [0, 100], levels: [30, 70] };
-          case 'macd': {
-            var m = Calc.macd(getSrc(a[0] || 'close'), a[1] || 12, a[2] || 26, a[3] || 9);
-            return { type: 'oscillator', label: 'MACD', macdData: m, colors: { macd: '#60a5fa', signal: '#f43f5e', histogram: '#6b7280' } };
-          }
-          case 'stoch': {
-            var s = Calc.stochastic(candles, a[0] || 14, a[1] || 3, a[2] || 3);
-            return { type: 'oscillator', label: 'Stoch(' + (a[0] || 14) + ')', stochData: s, range: [0, 100], levels: [20, 80] };
-          }
-          case 'atr': return { type: 'oscillator', label: 'ATR(' + (a[0] || 14) + ')', data: Calc.atr(candles, a[0] || 14), color: '#fbbf24' };
-          case 'obv': return { type: 'oscillator', label: 'OBV', data: Calc.obv(candles), color: '#34d399' };
-          case 'mfi': return { type: 'oscillator', label: 'MFI(' + (a[0] || 14) + ')', data: Calc.mfi(candles, a[0] || 14), color: '#e879f9', range: [0, 100], levels: [20, 80] };
-          case 'cci': return { type: 'oscillator', label: 'CCI(' + (a[0] || 20) + ')', data: Calc.cci(candles, a[0] || 20), color: '#fb923c' };
-          case 'momentum': return { type: 'oscillator', label: 'MOM(' + (a[1] || 10) + ')', data: Calc.momentum(getSrc(a[0] || 'close'), a[1] || 10), color: '#60a5fa' };
-
-          default: return null;
-        }
-      }
-    };
-
-    // ============================================================
-    // Indicator Registry
-    // ============================================================
-
-    var INDICATOR_MAP = {
-      vwap:           { name: 'VWAP',             formula: 'vwap()' },
-      ema200:         { name: '200 EMA',           formula: 'ema(close, 200)' },
-      ema7:           { name: '7 EMA',             formula: 'ema(close, 7)' },
-      ema22:          { name: '22 EMA',            formula: 'ema(close, 22)' },
-      rsi:            { name: 'RSI',               formula: 'rsi(close, 14)' },
-      macd:           { name: 'MACD',              formula: 'macd(close, 12, 26, 9)' },
-      volume:         { name: 'Volume',            formula: 'volume()' },
-      bb:             { name: 'Bollinger Bands',   formula: 'bb(close, 20, 2)' },
-      supertrend:     { name: 'Supertrend',        formula: 'supertrend(10, 3)' },
-      trendstructure: { name: 'Trend Structure',   formula: 'trendstructure(5, 2)' },
-      dtfxzones:      { name: 'DTFX Zones',        formula: 'dtfxzones(10)' },
-      vsa:            { name: 'VSA',               formula: 'vsa(5, 20)' },
-      vsahistogram:   { name: 'VSA Histogram',    formula: 'vsahistogram(100, 20)' },
-      stoch:          { name: 'Stochastic',        formula: 'stoch(14, 3, 3)' },
-      atr:            { name: 'ATR',               formula: 'atr(14)' },
-      ichimoku:       { name: 'Ichimoku',          formula: 'ichimoku(9, 26, 52, 26)' },
-      psar:           { name: 'Parabolic SAR',     formula: 'psar(0.02, 0.2)' },
-      smcpro:         { name: 'SMC Pro',            formula: 'smcpro(5, 1)' },
-    };
-
-    var INDICATOR_COLORS = {
-      vwap: '#a78bfa', ema200: '#f43f5e', ema7: '#fbbf24', ema22: '#60a5fa',
-    };
-
-    function loadIndicatorPrefs() {
-      // Only VWAP+2σ, SMC Pro, and Volume — all old indicators removed.
-      var defaults = { vwap: true, smcpro: true, volume: true,
-                       ema200: false, ema7: false, ema22: false, rsi: false, macd: false,
-                       bb: false, supertrend: false, trendstructure: false, dtfxzones: false,
-                       vsa: false, vsahistogram: false, stoch: false, atr: false,
-                       ichimoku: false, psar: false };
-      // Always reset to clean defaults — clears any stale localStorage settings
-      // that may have had old indicators (EMA200, RSI, MACD, etc.) turned on.
-      localStorage.setItem('mct_indicator_prefs', JSON.stringify(defaults));
-      return defaults;
-    }
-
-    function saveIndicatorPrefs(prefs) {
-      localStorage.setItem('mct_indicator_prefs', JSON.stringify(prefs));
-    }
-
-    function loadCustomScripts() {
-      var saved = localStorage.getItem('mct_custom_scripts');
-      if (!saved) return [];
-      var scripts = JSON.parse(saved);
-      var clean = scripts.filter(function(s) { return (s.name || '').length <= 50; });
-      if (clean.length !== scripts.length) {
-        localStorage.setItem('mct_custom_scripts', JSON.stringify(clean));
-      }
-      return clean;
-    }
-
-    function saveCustomScripts(scripts) {
-      localStorage.setItem('mct_custom_scripts', JSON.stringify(scripts));
-    }
-
-    function syncIndicatorUI(prefs) {
-      document.querySelectorAll('.ind-toggle input[data-ind]').forEach(function(cb) {
-        cb.checked = !!prefs[cb.dataset.ind];
-      });
-    }
-
-    function renderCustomScripts() {
-      var list = document.getElementById('custom-scripts-list');
-      if (!list) return;
-      var scripts = loadCustomScripts();
-      if (!scripts.length) {
-        list.innerHTML = '<div style="font-size:0.6rem;color:var(--color-fg-subtle);padding:2px 0;">No custom scripts added</div>';
-        return;
-      }
-      list.innerHTML = scripts.map(function(s, i) {
-        return '<div class="custom-script-item">'
-          + '<span class="custom-script-name">' + s.name + '</span>'
-          + '<button class="custom-script-remove" data-idx="' + i + '" title="Remove">&times;</button>'
-          + '</div>';
-      }).join('');
-
-      list.querySelectorAll('.custom-script-remove').forEach(function(btn) {
-        btn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          var idx = parseInt(btn.dataset.idx);
-          var scripts = loadCustomScripts();
-          scripts.splice(idx, 1);
-          saveCustomScripts(scripts);
-          renderCustomScripts();
-          recreateAllCharts();
-          showToast('Script removed', 'info');
-        });
-      });
-    }
-
-    // ============================================================
-    // Binance Kline Data Fetching
-    // ============================================================
-
-    // Timezone offset in seconds — shift UTC timestamps to user's local time
-    var TZ_OFFSET_SEC = -(new Date().getTimezoneOffset() * 60);
-
-    async function fetchKlines(symbol, interval, limit) {
-      limit = limit || 200;
-      var key = symbol + '_' + interval;
-      var cached = candleCache.get(key);
-      if (cached && Date.now() - cached.timestamp < getCacheTTL(interval)) return cached.candles;
-
-      var url = API_BASE + '/klines?symbol=' + symbol + '&interval=' + interval + '&limit=' + limit;
-      var resp = await fetch(url);
-      if (!resp.ok) throw new Error('Kline API ' + resp.status);
-      var candles = await resp.json();
-
-      // Shift timestamps from UTC to user's local timezone
-      for (var i = 0; i < candles.length; i++) {
-        candles[i].time += TZ_OFFSET_SEC;
-      }
-
-      candleCache.set(key, { candles: candles, timestamp: Date.now() });
-      return candles;
-    }
 
     async function fetchChartData() {
       var url = API_BASE + '/data?symbol=' + STATE.symbol + '&interval=' + STATE.interval + '&limit=300';
@@ -2569,713 +1333,7 @@
     }
 
     // ============================================================
-    // Chart Creation with Lightweight Charts
-    // ============================================================
-
-    var CHART_THEME = {
-      layout: { background: { color: '#000000' }, textColor: '#9a8e80', fontFamily: 'JetBrains Mono, monospace', fontSize: 15 },
-      grid: { vertLines: { color: 'rgba(30, 30, 30, 0.5)' }, horzLines: { color: 'rgba(30, 30, 30, 0.5)' } },
-      crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: 'rgba(212,175,55,0.3)', labelBackgroundColor: '#d4af37' }, horzLine: { color: 'rgba(212,175,55,0.3)', labelBackgroundColor: '#d4af37' } },
-      rightPriceScale: { borderColor: '#2a2438' },
-      timeScale: { borderColor: '#2a2438', timeVisible: true, secondsVisible: false },
-      watermark: { visible: false },
-    };
-
-    var CANDLE_OPTIONS = {
-      upColor: '#34d399', downColor: '#f43f5e',
-      borderUpColor: '#34d399', borderDownColor: '#f43f5e',
-      wickUpColor: '#34d399', wickDownColor: '#f43f5e',
-    };
-
-    // Track user-closed oscillator sub-charts so they don't reappear
-    function getClosedOscillators() {
-      var saved = localStorage.getItem('mct_closed_oscillators');
-      return saved ? JSON.parse(saved) : [];
-    }
-    function closeOscillator(label) {
-      var list = getClosedOscillators();
-      if (list.indexOf(label) === -1) { list.push(label); localStorage.setItem('mct_closed_oscillators', JSON.stringify(list)); }
-    }
-    function reopenOscillator(label) {
-      var list = getClosedOscillators().filter(function(l) { return l !== label; });
-      localStorage.setItem('mct_closed_oscillators', JSON.stringify(list));
-    }
-
-    function getOscillatorSizes() {
-      var saved = localStorage.getItem('mct_oscillator_sizes');
-      return saved ? JSON.parse(saved) : {};
-    }
-    function saveOscillatorSize(label, height) {
-      var sizes = getOscillatorSizes();
-      sizes[label] = height;
-      localStorage.setItem('mct_oscillator_sizes', JSON.stringify(sizes));
-    }
-
-    function destroyPanel(idx) {
-      var p = chartPanels[idx];
-      p.subCharts.forEach(function(sc) { if (sc.chart) sc.chart.remove(); if (sc.container) sc.container.remove(); });
-      if (p.chart) p.chart.remove();
-      var statsEl = document.getElementById('smc-stats-' + idx);
-      if (statsEl) statsEl.remove();
-      p.chart = null; p.candleSeries = null; p.volumeSeries = null;
-      p.overlaySeries = []; p.subCharts = []; p.candles = [];
-    }
-
-    async function createChart(idx) {
-      destroyPanel(idx);
-
-      var container = document.getElementById('chart-main-' + idx);
-      if (!container) return;
-      container.innerHTML = '';
-
-      // Show loading overlay
-      var loadingEl = document.createElement('div');
-      loadingEl.className = 'chart-loading-overlay';
-      loadingEl.textContent = 'Loading...';
-      container.appendChild(loadingEl);
-
-      var chart = LightweightCharts.createChart(container, Object.assign({}, CHART_THEME, {
-        width: container.clientWidth,
-        height: container.clientHeight,
-      }));
-
-      var candleSeries = chart.addCandlestickSeries(CANDLE_OPTIONS);
-      var p = chartPanels[idx];
-      p.chart = chart;
-      p.candleSeries = candleSeries;
-
-      // Fetch data
-      var binanceInterval = TV_TO_BINANCE[chartIntervals[idx]] || '1m';
-      try {
-        var candles = await fetchKlines(STATE.symbol, binanceInterval);
-        p.candles = candles;
-
-        // Auto-detect price precision for small-cap tokens (e.g. PEPE at $0.003)
-        if (candles.length > 0) {
-          var samplePrice = candles[candles.length - 1].close;
-          var minMove = samplePrice >= 1000 ? 0.01
-            : samplePrice >= 1 ? 0.0001
-            : samplePrice >= 0.01 ? 0.000001
-            : samplePrice >= 0.0001 ? 0.00000001
-            : 0.0000000001;
-          var precision = samplePrice >= 1000 ? 2
-            : samplePrice >= 1 ? 4
-            : samplePrice >= 0.01 ? 6
-            : samplePrice >= 0.0001 ? 8
-            : 10;
-          candleSeries.applyOptions({ priceFormat: { type: 'price', precision: precision, minMove: minMove } });
-        }
-
-        candleSeries.setData(candles);
-        // Default zoom: 1m shows 50 candles (wider bars), others show 100
-        var totalBars = candles.length;
-        var visibleBars = binanceInterval === '1m' ? 50 : 100;
-        if (totalBars > visibleBars) {
-          chart.timeScale().setVisibleLogicalRange({ from: totalBars - visibleBars, to: totalBars });
-        } else {
-          chart.timeScale().fitContent();
-        }
-
-        // Apply indicators
-        applyIndicators(idx);
-        // Hide loading overlay
-        if (loadingEl.parentNode) loadingEl.remove();
-      } catch (err) {
-        console.error('Failed to load candles for panel ' + idx + ':', err);
-        loadingEl.textContent = 'Failed to load';
-        setTimeout(function() { if (loadingEl.parentNode) loadingEl.remove(); }, 2000);
-      }
-
-      // Resize observer
-      var ro = new ResizeObserver(function() {
-        chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
-      });
-      ro.observe(container);
-      p._resizeObserver = ro;
-    }
-
-    function applyIndicators(idx) {
-      var p = chartPanels[idx];
-      if (!p.chart || !p.candles.length) return;
-
-      // Clear ALL existing overlays, sub-charts, and markers
-      p.overlaySeries.forEach(function(s) { try { p.chart.removeSeries(s); } catch(_) {} });
-      p.overlaySeries = [];
-      p.subCharts.forEach(function(sc) { if (sc.chart) sc.chart.remove(); if (sc.container) sc.container.remove(); });
-      p.subCharts = [];
-      if (p.volumeSeries) { try { p.chart.removeSeries(p.volumeSeries); } catch(_) {} p.volumeSeries = null; }
-      // Clear markers to prevent accumulation on each reapply
-      if (p.candleSeries) { try { p.candleSeries.setMarkers([]); } catch(_) {} }
-
-      // Shared marker array — all indicators push here, set once at end
-      var _allChartMarkers = [];
-
-      var prefs = loadIndicatorPrefs();
-      var allFormulas = [];
-
-      // Built-in indicators
-      Object.keys(INDICATOR_MAP).forEach(function(key) {
-        if (!prefs[key]) return;
-        var def = INDICATOR_MAP[key];
-        var parsed = FormulaParser.parse(def.formula);
-        if (parsed) {
-          parsed._builtinKey = key;
-          allFormulas.push(parsed);
-        }
-      });
-
-      // Custom scripts
-      var customs = loadCustomScripts();
-      customs.forEach(function(s) {
-        var parsed = FormulaParser.parse(s.formula || s.name);
-        if (parsed) allFormulas.push(parsed);
-      });
-
-      var panelBody = document.getElementById('chart-main-' + idx).parentElement;
-
-      allFormulas.forEach(function(parsed) {
-        var result = FormulaParser.execute(parsed, p.candles);
-        if (!result) return;
-
-        var times = p.candles.map(function(c) { return c.time; });
-
-        if (result.type === 'volume') {
-          var volSeries = p.chart.addHistogramSeries({
-            priceScaleId: 'vol', priceFormat: { type: 'volume' },
-            color: 'rgba(212,175,55,0.3)',
-          });
-          p.chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-          volSeries.setData(p.candles.map(function(c) {
-            return { time: c.time, value: c.volume, color: c.close >= c.open ? 'rgba(52,211,153,0.3)' : 'rgba(244,63,94,0.3)' };
-          }));
-          p.volumeSeries = volSeries;
-          return;
-        }
-
-        if (result.type === 'vsahistogram') {
-          var vhd = result.vsaHistData;
-
-          // Colored histogram bars in their own sub-pane
-          var vsaHistSeries = p.chart.addHistogramSeries({
-            priceScaleId: 'vsa-hist',
-            priceFormat: { type: 'volume' },
-            lastValueVisible: false,
-            priceLineVisible: false,
-          });
-          p.chart.priceScale('vsa-hist').applyOptions({
-            scaleMargins: { top: 0.7, bottom: 0 },
-            visible: false,
-          });
-          vsaHistSeries.setData(vhd.bars);
-          p.overlaySeries.push(vsaHistSeries);
-
-          // Volume MA line (gray) overlaid on same pane
-          var vmaSeries = p.chart.addLineSeries({
-            color: '#94a3b8',
-            lineWidth: 1,
-            priceScaleId: 'vsa-hist',
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-          });
-          var vmaData = [];
-          for (var vi = 0; vi < vhd.candles.length && vi < vhd.vma.length; vi++) {
-            if (vhd.vma[vi] !== null) vmaData.push({ time: vhd.candles[vi].time, value: vhd.vma[vi] });
-          }
-          vmaSeries.setData(vmaData);
-          p.overlaySeries.push(vmaSeries);
-          return;
-        }
-
-        if (result.type === 'overlay') {
-          if (result.multi) {
-            result.multi.forEach(function(line) {
-              var series = p.chart.addLineSeries({ color: line.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-              var data = [];
-              for (var i = 0; i < times.length && i < line.data.length; i++) {
-                if (line.data[i] !== null) data.push({ time: times[i], value: line.data[i] });
-              }
-              series.setData(data);
-              p.overlaySeries.push(series);
-            });
-          } else if (result.trendStructureData) {
-            // Trend Structure: trend lines + markers + background
-            var tsd = result.trendStructureData;
-
-            // Draw trend lines as line series segments
-            tsd.trendLines.forEach(function(tl) {
-              var lineSeries = p.chart.addLineSeries({
-                color: tl.color, lineWidth: 2, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false,
-              });
-              lineSeries.setData([
-                { time: tl.t1, value: tl.p1 },
-                { time: tl.t2, value: tl.p2 },
-              ]);
-              p.overlaySeries.push(lineSeries);
-            });
-
-            // Collect markers (set once at end of applyIndicators)
-            if (tsd.markers.length) {
-              tsd.markers.forEach(function(m) { _allChartMarkers.push(m); });
-            }
-
-          } else if (result.dtfxData) {
-            // DTFX Algo Zones: zone boxes + fib lines + HH/HL/LH/LL markers
-            var dzd = result.dtfxData;
-
-            // Draw zone boxes — lines only, no area fill
-            dzd.zones.forEach(function(zone) {
-              var isBull = zone.type === 'bull';
-              var lineColor = isBull ? 'rgba(52,211,153,0.4)' : 'rgba(244,63,94,0.4)';
-
-              // Top boundary line
-              var topLine = p.chart.addLineSeries({
-                color: lineColor, lineWidth: 1, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false,
-              });
-
-              var zoneData = [];
-              for (var ci = 0; ci < p.candles.length; ci++) {
-                var t = p.candles[ci].time;
-                if (t >= zone.startTime && t <= zone.endTime) {
-                  zoneData.push({ time: t, value: zone.top });
-                }
-              }
-              if (zoneData.length > 0) {
-                var lastCandle = p.candles[p.candles.length - 1];
-                if (lastCandle.time > zone.endTime) {
-                  zoneData.push({ time: lastCandle.time, value: zone.top });
-                }
-              }
-
-              topLine.setData(zoneData);
-              p.overlaySeries.push(topLine);
-
-              // Bottom boundary line
-              var botLine = p.chart.addLineSeries({
-                color: lineColor, lineWidth: 1, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false,
-              });
-              var botData = [];
-              for (var ci = 0; ci < p.candles.length; ci++) {
-                var t = p.candles[ci].time;
-                if (t >= zone.startTime) {
-                  botData.push({ time: t, value: zone.bottom });
-                }
-              }
-              if (botData.length > 0) {
-                var lastCandle = p.candles[p.candles.length - 1];
-                if (lastCandle.time > zone.endTime && botData[botData.length - 1].time !== lastCandle.time) {
-                  botData.push({ time: lastCandle.time, value: zone.bottom });
-                }
-              }
-              botLine.setData(botData);
-              p.overlaySeries.push(botLine);
-
-              // Fib level lines inside the zone
-              var fibColors = ['rgba(251,191,36,0.4)', 'rgba(167,139,250,0.5)', 'rgba(251,191,36,0.4)'];
-              zone.fibs.forEach(function(fv, fi) {
-                var fibLine = p.chart.addLineSeries({
-                  color: fibColors[fi] || 'rgba(167,139,250,0.3)', lineWidth: 1, lineStyle: 3,
-                  priceLineVisible: false, lastValueVisible: false,
-                  crosshairMarkerVisible: false,
-                });
-                var fibData = [];
-                for (var ci = 0; ci < p.candles.length; ci++) {
-                  var t = p.candles[ci].time;
-                  if (t >= zone.startTime) {
-                    fibData.push({ time: t, value: fv });
-                  }
-                }
-                if (fibData.length > 0) {
-                  var lastCandle = p.candles[p.candles.length - 1];
-                  if (lastCandle.time > zone.endTime && fibData[fibData.length - 1].time !== lastCandle.time) {
-                    fibData.push({ time: lastCandle.time, value: fv });
-                  }
-                }
-                fibLine.setData(fibData);
-                p.overlaySeries.push(fibLine);
-              });
-            });
-
-            // Collect markers (set once at end of applyIndicators)
-            if (dzd.markers.length) {
-              dzd.markers.forEach(function(m) { _allChartMarkers.push(m); });
-            }
-
-          } else if (result.vsaData) {
-            // Volume Spread Analysis: boxes for volume events + VMA overlay
-            var vsa = result.vsaData;
-
-            // Draw effect boxes
-            vsa.boxes.forEach(function(box) {
-              var bullColor = 'rgba(0,255,187,';
-              var bearColor = 'rgba(255,17,0,';
-              var baseColor = box.isBull ? bullColor : bearColor;
-
-              // Top line of box
-              var topLine = p.chart.addLineSeries({
-                color: baseColor + '0.5)', lineWidth: 1, lineStyle: 0,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false,
-              });
-              // Bottom line of box
-              var botLine = p.chart.addLineSeries({
-                color: baseColor + '0.5)', lineWidth: 1, lineStyle: 0,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false,
-              });
-
-              var topData = [], botData = [];
-              for (var ci = 0; ci < p.candles.length; ci++) {
-                var t = p.candles[ci].time;
-                if (t >= box.startTime && t <= box.endTime) {
-                  topData.push({ time: t, value: box.high });
-                  botData.push({ time: t, value: box.low });
-                }
-              }
-
-              topLine.setData(topData);
-              botLine.setData(botData);
-              p.overlaySeries.push(topLine);
-              p.overlaySeries.push(botLine);
-
-              // Signal marker at box end
-              if (box.signal !== 'neutral') {
-                var sigColor = box.signal === 'divergence' ? '#ff1100' : '#00ffbb';
-                var sigText = box.signal === 'divergence' ? 'DIV' : 'CON';
-                _allChartMarkers.push({
-                  time: box.endTime,
-                  position: box.isBull ? 'belowBar' : 'aboveBar',
-                  color: sigColor, shape: 'square', text: sigText,
-                });
-              }
-            });
-
-            // Draw Volume MA as overlay line
-            if (vsa.vma) {
-              var vmaLine = p.chart.addLineSeries({
-                color: '#1848cc', lineWidth: 1,
-                priceLineVisible: false, lastValueVisible: false,
-                priceScaleId: 'vol-vsa',
-              });
-              p.chart.priceScale('vol-vsa').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, visible: false });
-              var vmaLineData = [];
-              for (var ci = 0; ci < p.candles.length && ci < vsa.vma.length; ci++) {
-                if (vsa.vma[ci] !== null) {
-                  vmaLineData.push({ time: p.candles[ci].time, value: vsa.vma[ci] });
-                }
-              }
-              vmaLine.setData(vmaLineData);
-              p.overlaySeries.push(vmaLine);
-            }
-
-          } else if (result.smcProData) {
-            // SMC Pro: full Zeiierman-style SMC visualization
-            var smc = result.smcProData;
-            var lastTime = p.candles[p.candles.length - 1].time;
-            var firstTime = p.candles[0].time;
-
-            // 1. Background shading removed — clean black chart
-
-            // 2. Swing connector lines (dashed, recent only)
-            smc.swingLines.forEach(function(sl) {
-              var line = p.chart.addLineSeries({
-                color: sl.color, lineWidth: 1, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-              });
-              line.setData([{ time: sl.t1, value: sl.p1 }, { time: sl.t2, value: sl.p2 }]);
-              p.overlaySeries.push(line);
-            });
-
-            // 3. BOS/BMS/CHoCH — markers + horizontal dashed lines (last 6 only)
-            var allMarkers = _allChartMarkers; // use shared array
-            var recentBreaks = smc.structureBreaks.slice(-6);
-            recentBreaks.forEach(function(sb) {
-              var isBull = sb.dir === 'bull';
-              var color = isBull ? '#34d399' : '#f43f5e';
-              // Marker label
-              allMarkers.push({
-                time: sb.time,
-                position: isBull ? 'belowBar' : 'aboveBar',
-                color: color, shape: 'square', text: sb.type,
-              });
-              // Horizontal dashed line extending from break point to right
-              var breakLine = p.chart.addLineSeries({
-                color: color, lineWidth: 1, lineStyle: 2,
-                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false,
-              });
-              // Extend line ~20 candles to the right from break point
-              var sbIdx = -1;
-              for (var ci = 0; ci < p.candles.length; ci++) { if (p.candles[ci].time === sb.time) { sbIdx = ci; break; } }
-              if (sbIdx >= 0) {
-                var endIdx = Math.min(p.candles.length - 1, sbIdx + 20);
-                breakLine.setData([{ time: sb.time, value: sb.price }, { time: p.candles[endIdx].time, value: sb.price }]);
-                p.overlaySeries.push(breakLine);
-              }
-            });
-
-            // 4. HH/HL/LH/LL swing labels
-            smc.markers.forEach(function(m) { allMarkers.push(m); });
-
-            // 5–10 removed: Weak High, PDH/PDL, PWH/PWL, Mid Range, EQL/EQH, Order Blocks
-            // Chart now matches TradingView SMC Expo: pivot labels + BMS/CHoCH only
-
-            // 11. Stats box (HTML overlay)
-            var statsId = 'smc-stats-' + idx;
-            var existingStats = document.getElementById(statsId);
-            if (existingStats) existingStats.remove();
-            var statsBox = document.createElement('div');
-            statsBox.id = statsId;
-            var trendLabel = smc.currentTrend === 'up' ? 'Positive' : smc.currentTrend === 'down' ? 'Negative' : 'Neutral';
-            var trendColor = smc.currentTrend === 'up' ? '#34d399' : smc.currentTrend === 'down' ? '#f43f5e' : '#9a8e80';
-            var dp = smc.upperRange >= 100 ? 2 : smc.upperRange >= 1 ? 4 : 6;
-            statsBox.innerHTML = '<div style="display:flex;gap:8px;align-items:center;margin-bottom:2px;"><span style="color:#9a8e80;">Trend:</span><span style="color:' + trendColor + ';font-weight:600;">' + trendLabel + '</span></div>'
-              + '<div><span style="color:#9a8e80;">Upper Range:</span> <span style="color:#eee;">' + smc.upperRange.toFixed(dp) + '</span></div>'
-              + '<div><span style="color:#9a8e80;">Lower Range:</span> <span style="color:#eee;">' + smc.lowerRange.toFixed(dp) + '</span></div>'
-              + '<div><span style="color:#9a8e80;">Mid:</span> <span style="color:#fbbf24;">' + smc.midRange.toFixed(dp) + '</span></div>';
-            statsBox.style.cssText = 'position:absolute;top:8px;right:8px;z-index:10;background:rgba(0,0,0,0.9);border:1px solid #2a2438;border-radius:6px;padding:6px 10px;font-size:10px;line-height:1.5;pointer-events:none;font-family:JetBrains Mono,monospace;';
-            var chartContainer = document.getElementById('chart-main-' + idx);
-            if (chartContainer) chartContainer.appendChild(statsBox);
-
-          } else if (result.coloredData) {
-            // Supertrend: colored line
-            var series = p.chart.addLineSeries({ lineWidth: 2, priceLineVisible: false, lastValueVisible: false, color: '#34d399' });
-            var data = [];
-            for (var i = 0; i < times.length && i < result.coloredData.value.length; i++) {
-              if (result.coloredData.value[i] !== null) {
-                data.push({ time: times[i], value: result.coloredData.value[i], color: result.coloredData.direction[i] === 1 ? '#34d399' : '#f43f5e' });
-              }
-            }
-            series.setData(data);
-            p.overlaySeries.push(series);
-          } else if (result.lineType === 'dots') {
-            // PSAR dots
-            var series = p.chart.addLineSeries({
-              color: result.color || '#fbbf24', lineWidth: 0, priceLineVisible: false, lastValueVisible: false,
-              pointMarkersVisible: true, pointMarkersRadius: 2,
-            });
-            var data = [];
-            for (var i = 0; i < times.length && i < result.data.length; i++) {
-              if (result.data[i] !== null) data.push({ time: times[i], value: result.data[i] });
-            }
-            series.setData(data);
-            p.overlaySeries.push(series);
-          } else {
-            var color = result.color;
-            if (parsed._builtinKey && INDICATOR_COLORS[parsed._builtinKey]) color = INDICATOR_COLORS[parsed._builtinKey];
-            var series = p.chart.addLineSeries({ color: color || '#60a5fa', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-            var data = [];
-            for (var i = 0; i < times.length && i < result.data.length; i++) {
-              if (result.data[i] !== null) data.push({ time: times[i], value: result.data[i] });
-            }
-            series.setData(data);
-            p.overlaySeries.push(series);
-          }
-        } else if (result.type === 'oscillator') {
-          // Skip if user previously closed this oscillator
-          if (getClosedOscillators().indexOf(result.label) >= 0) return;
-          // Create sub-chart — restore saved height or default 80
-          var savedSizes = getOscillatorSizes();
-          var subH = savedSizes[result.label] || 80;
-          var subDiv = document.createElement('div');
-          subDiv.className = 'sub-chart-container';
-          subDiv.style.position = 'relative';
-          subDiv.style.height = subH + 'px';
-          panelBody.appendChild(subDiv);
-
-          var labelEl = document.createElement('div');
-          labelEl.className = 'sub-chart-label';
-          labelEl.textContent = result.label;
-          subDiv.appendChild(labelEl);
-
-          // Close and resize controls
-          var controlsEl = document.createElement('div');
-          controlsEl.className = 'sub-chart-controls';
-          var closeBtn = document.createElement('button');
-          closeBtn.className = 'sub-chart-btn close-btn';
-          closeBtn.title = 'Close ' + result.label;
-          closeBtn.textContent = '\u00D7';
-          controlsEl.appendChild(closeBtn);
-          subDiv.appendChild(controlsEl);
-
-          var resizeHandle = document.createElement('div');
-          resizeHandle.className = 'sub-chart-resize-handle';
-          subDiv.appendChild(resizeHandle);
-
-          var subChart = LightweightCharts.createChart(subDiv, Object.assign({}, CHART_THEME, {
-            width: subDiv.clientWidth || panelBody.clientWidth,
-            height: subH,
-          }));
-
-          // Close handler — persist so it stays closed on reapply
-          (function(sd, sc, lbl) {
-            closeBtn.addEventListener('click', function() {
-              closeOscillator(lbl);
-              sc.remove();
-              sd.remove();
-              // Show reopen bar if not already visible
-              updateReopenBar(idx);
-            });
-          })(subDiv, subChart, result.label);
-
-          // Drag-to-resize handler — saves height to localStorage on release
-          (function(sd, sc, lbl) {
-            var startY, startH;
-            function onMouseMove(e) {
-              var newH = Math.max(40, startH + (e.clientY - startY));
-              sd.style.height = newH + 'px';
-              sc.applyOptions({ height: newH });
-            }
-            function onMouseUp() {
-              document.removeEventListener('mousemove', onMouseMove);
-              document.removeEventListener('mouseup', onMouseUp);
-              document.body.style.userSelect = '';
-              document.body.style.cursor = '';
-              saveOscillatorSize(lbl, sd.offsetHeight);
-            }
-            resizeHandle.addEventListener('mousedown', function(e) {
-              e.preventDefault();
-              startY = e.clientY;
-              startH = sd.offsetHeight;
-              document.body.style.userSelect = 'none';
-              document.body.style.cursor = 'ns-resize';
-              document.addEventListener('mousemove', onMouseMove);
-              document.addEventListener('mouseup', onMouseUp);
-            });
-          })(subDiv, subChart, result.label);
-          subChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: 0.1 } });
-          subChart.timeScale().applyOptions({ visible: false });
-
-          // Sync time scale
-          p.chart.timeScale().subscribeVisibleLogicalRangeChange(function(range) {
-            if (range) subChart.timeScale().setVisibleLogicalRange(range);
-          });
-
-          if (result.macdData) {
-            var macdSeries = subChart.addLineSeries({ color: result.colors.macd, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-            var sigSeries = subChart.addLineSeries({ color: result.colors.signal, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-            var histSeries = subChart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
-            var mData = [], sData = [], hData = [];
-            for (var i = 0; i < times.length; i++) {
-              if (result.macdData.macd[i] !== null) mData.push({ time: times[i], value: result.macdData.macd[i] });
-              if (result.macdData.signal[i] !== null) sData.push({ time: times[i], value: result.macdData.signal[i] });
-              if (result.macdData.histogram[i] !== null) hData.push({ time: times[i], value: result.macdData.histogram[i], color: result.macdData.histogram[i] >= 0 ? 'rgba(52,211,153,0.5)' : 'rgba(244,63,94,0.5)' });
-            }
-            macdSeries.setData(mData);
-            sigSeries.setData(sData);
-            histSeries.setData(hData);
-          } else if (result.stochData) {
-            var kSeries = subChart.addLineSeries({ color: '#60a5fa', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-            var dSeries = subChart.addLineSeries({ color: '#f43f5e', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-            var kData = [], dData = [];
-            for (var i = 0; i < times.length; i++) {
-              if (result.stochData.k[i] !== null) kData.push({ time: times[i], value: result.stochData.k[i] });
-            }
-            var dIdx = 0;
-            for (var i = 0; i < times.length; i++) {
-              if (result.stochData.k[i] !== null && dIdx < result.stochData.d.length) {
-                if (result.stochData.d[dIdx] !== null) dData.push({ time: times[i], value: result.stochData.d[dIdx] });
-                dIdx++;
-              }
-            }
-            kSeries.setData(kData);
-            dSeries.setData(dData);
-            if (result.levels) {
-              result.levels.forEach(function(lv) {
-                kSeries.createPriceLine({ price: lv, color: 'rgba(107,114,128,0.4)', lineWidth: 1, lineStyle: 2 });
-              });
-            }
-          } else {
-            var lineSeries = subChart.addLineSeries({ color: result.color || '#a78bfa', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-            var lineData = [];
-            for (var i = 0; i < times.length && i < result.data.length; i++) {
-              if (result.data[i] !== null) lineData.push({ time: times[i], value: result.data[i] });
-            }
-            lineSeries.setData(lineData);
-            if (result.levels) {
-              result.levels.forEach(function(lv) {
-                lineSeries.createPriceLine({ price: lv, color: 'rgba(107,114,128,0.4)', lineWidth: 1, lineStyle: 2 });
-              });
-            }
-          }
-
-          // Resize sub-chart
-          var subRo = new ResizeObserver(function() {
-            subChart.applyOptions({ width: subDiv.clientWidth });
-          });
-          subRo.observe(subDiv);
-
-          p.subCharts.push({ chart: subChart, container: subDiv, resizeObserver: subRo });
-        }
-      });
-
-      // Set ALL collected markers once at the end (prevents duplication)
-      if (p.candleSeries && _allChartMarkers.length > 0) {
-        _allChartMarkers.sort(function(a, b) { return a.time - b.time; });
-        p.candleSeries.setMarkers(_allChartMarkers);
-      }
-
-      // Show reopen bar for any closed oscillators
-      updateReopenBar(idx);
-    }
-
-    function updateReopenBar(idx) {
-      var panelBody = document.getElementById('chart-main-' + idx).parentElement;
-      var existing = panelBody.querySelector('.reopen-bar');
-      if (existing) existing.remove();
-
-      var closed = getClosedOscillators();
-      if (!closed.length) return;
-
-      var bar = document.createElement('div');
-      bar.className = 'reopen-bar';
-      bar.style.cssText = 'display:flex;gap:6px;padding:4px 8px;background:#1a1625;border-top:1px solid #2a2438;align-items:center;flex-wrap:wrap;';
-
-      var label = document.createElement('span');
-      label.style.cssText = 'color:#9a8e80;font-size:10px;margin-right:4px;';
-      label.textContent = 'Closed:';
-      bar.appendChild(label);
-
-      closed.forEach(function(name) {
-        var btn = document.createElement('button');
-        btn.style.cssText = 'background:#2a2438;color:#d4af37;border:1px solid #3a3448;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:inherit;';
-        btn.textContent = name + ' \u21BB';
-        btn.title = 'Reopen ' + name;
-        btn.addEventListener('click', function() {
-          reopenOscillator(name);
-          applyIndicators(idx);
-        });
-        bar.appendChild(btn);
-      });
-
-      panelBody.appendChild(bar);
-    }
-
-    async function createAllCharts() {
-      _chartCreating = true;
-      // Create all panels in parallel for speed
-      await Promise.all(Array.from({ length: CHART_COUNT }, function(_, i) { return createChart(i); }));
-      _chartCreating = false;
-    }
-
-    function recreateAllCharts() {
-      if (_chartCreating) return; // skip if already creating
-      if (_recreateTimer) clearTimeout(_recreateTimer);
-      _recreateTimer = setTimeout(async function() {
-        if (_chartCreating) return;
-        _chartCreating = true;
-        await Promise.all(Array.from({ length: CHART_COUNT }, function(_, i) { return createChart(i); }));
-        _chartCreating = false;
-      }, 50);
-    }
-
-    // ============================================================
-    // SMC Data + UI Updates (unchanged)
+    // SMC Data + UI Updates
     // ============================================================
 
     function formatPrice(price) {
@@ -3364,9 +1422,6 @@
     }
 
     function handleCoinSelect(symbol) {
-      if (_chartCreating) return; // prevent double-click while loading
-      document.getElementById('left-sidebar').classList.remove('mobile-open');
-      document.getElementById('mobile-overlay').classList.remove('active');
       STATE.symbol = symbol;
       saveChartSettings();
       DOM.toolbarSymbol.textContent = symbol;
@@ -3381,10 +1436,10 @@
         DOM.toolbarChange.textContent = (coin.change24h >= 0 ? '+' : '') + coin.change24h.toFixed(2) + '%';
         DOM.toolbarChange.className = 'toolbar-change ' + (coin.change24h >= 0 ? 'positive' : 'negative');
       }
-      candleCache.clear();
-      recreateAllCharts();
+      document.getElementById('left-sidebar').classList.remove('mobile-open');
+      document.getElementById('mobile-overlay').classList.remove('active');
+      updateAllWidgetSymbols();
       connectWebSocket();
-      // Load sidebar data after charts are done (non-blocking)
       setTimeout(loadSmcData, 500);
     }
 
@@ -3421,117 +1476,37 @@
     }
 
     // ============================================================
-    // WebSocket -- Live Price + Candle Updates
+    // WebSocket â€” Live Price Ticker (toolbar only)
     // ============================================================
 
     function connectWebSocket() {
       if (STATE.ws) { STATE.ws.onclose = null; STATE.ws.close(); STATE.ws = null; }
 
-      // Build combined stream for all active panel intervals
       var sym = STATE.symbol.toLowerCase();
-      var streams = [];
-      var seenIntervals = {};
-      for (var i = 0; i < CHART_COUNT; i++) {
-        var bi = TV_TO_BINANCE[chartIntervals[i]] || '1m';
-        if (!seenIntervals[bi]) { streams.push(sym + '@kline_' + bi); seenIntervals[bi] = true; }
-      }
-      // Also include the STATE.interval for toolbar
-      if (!seenIntervals[STATE.interval]) streams.push(sym + '@kline_' + STATE.interval);
-
-      var wsUrl = 'wss://fstream.binance.com/stream?streams=' + streams.join('/');
-      var ws = new WebSocket(wsUrl);
+      var ws = new WebSocket('wss://fstream.binance.com/ws/' + sym + '@bookTicker');
       STATE.ws = ws;
-
-      ws.onopen = function() { console.log('[WS] Connected: ' + streams.join(', ')); };
 
       ws.onmessage = function(event) {
         try {
-          var msg = JSON.parse(event.data);
-          var data = msg.data;
-          if (!data || !data.k) return;
-
-          var k = data.k;
-          var closePrice = parseFloat(k.c);
-
-          // Update toolbar price
-          if (DOM.toolbarPrice) {
-            var prevPrice = STATE.lastPrice;
-            STATE.lastPrice = closePrice;
-            DOM.toolbarPrice.textContent = '$' + formatPrice(closePrice);
-            if (prevPrice !== null && closePrice !== prevPrice) {
-              var tickClass = closePrice > prevPrice ? 'tick-up' : 'tick-down';
-              DOM.toolbarPrice.classList.remove('tick-up', 'tick-down');
-              DOM.toolbarPrice.classList.add(tickClass);
-              setTimeout(function() { DOM.toolbarPrice.classList.remove(tickClass); }, 600);
-            }
+          var data = JSON.parse(event.data);
+          var closePrice = parseFloat(data.b || data.a);
+          if (!closePrice) return;
+          var prevPrice = STATE.lastPrice;
+          STATE.lastPrice = closePrice;
+          DOM.toolbarPrice.textContent = '$' + formatPrice(closePrice);
+          if (prevPrice !== null && closePrice !== prevPrice) {
+            var tickClass = closePrice > prevPrice ? 'tick-up' : 'tick-down';
+            DOM.toolbarPrice.classList.remove('tick-up', 'tick-down');
+            DOM.toolbarPrice.classList.add(tickClass);
+            setTimeout(function() { DOM.toolbarPrice.classList.remove(tickClass); }, 600);
           }
-
           var coinEl = document.querySelector('.coin-item[data-symbol="' + STATE.symbol + '"] .coin-price');
           if (coinEl) coinEl.textContent = '$' + formatPrice(closePrice);
-
-          // Update live candle on matching chart panels (shifted to local time)
-          var candle = {
-            time: Math.floor(parseInt(k.t) / 1000) + TZ_OFFSET_SEC,
-            open: parseFloat(k.o),
-            high: parseFloat(k.h),
-            low: parseFloat(k.l),
-            close: closePrice,
-            volume: parseFloat(k.v),
-          };
-
-          var kInterval = k.i;
-          var isClosed = k.x === true;
-          for (var i = 0; i < CHART_COUNT; i++) {
-            var panelInterval = TV_TO_BINANCE[chartIntervals[i]];
-            if (panelInterval === kInterval && chartPanels[i].candleSeries) {
-              var p = chartPanels[i];
-
-              // Update or append candle in the data array
-              if (p.candles.length > 0) {
-                var lastCandle = p.candles[p.candles.length - 1];
-                if (lastCandle.time === candle.time) {
-                  // Update existing candle
-                  lastCandle.open = candle.open;
-                  lastCandle.high = candle.high;
-                  lastCandle.low = candle.low;
-                  lastCandle.close = candle.close;
-                  lastCandle.volume = candle.volume;
-                } else if (candle.time > lastCandle.time) {
-                  // New candle
-                  p.candles.push(candle);
-                  // Keep array from growing unbounded
-                  if (p.candles.length > 500) p.candles.shift();
-                }
-              }
-
-              p.candleSeries.update(candle);
-
-              // Update volume if active
-              if (p.volumeSeries) {
-                p.volumeSeries.update({
-                  time: candle.time, value: candle.volume,
-                  color: candle.close >= candle.open ? 'rgba(52,211,153,0.3)' : 'rgba(244,63,94,0.3)',
-                });
-              }
-
-              // Reapply indicators when a candle closes (throttled: max once per 10s per panel)
-              if (isClosed) {
-                var now = Date.now();
-                if (now - _lastIndicatorApply[i] > 10000) {
-                  _lastIndicatorApply[i] = now;
-                  applyIndicators(i);
-                }
-              }
-            }
-          }
         } catch (_) {}
       };
 
-      ws.onclose = function() {
-        console.log('[WS] Disconnected, reconnecting in 3s...');
-        setTimeout(function() { if (STATE.symbol) connectWebSocket(); }, 3000);
-      };
-      ws.onerror = function(err) { console.error('[WS] Error:', err); ws.close(); };
+      ws.onclose = function() { setTimeout(function() { if (STATE.symbol) connectWebSocket(); }, 3000); };
+      ws.onerror = function() { ws.close(); };
     }
 
     var miniTickerWs = null;
@@ -3553,35 +1528,89 @@
     }
 
     // ============================================================
-    // Add Custom Script (global for inline onclick)
+    // TradingView Widget
     // ============================================================
 
-    function addCustomScript() {
-      var scriptInput = document.getElementById('script-name-input');
-      var indDropdown = document.getElementById('indicator-dropdown');
-      var indBtn = document.getElementById('btn-indicators');
-      var name = scriptInput.value.trim();
-      if (!name) { showToast('Type a formula or indicator name', 'warning'); scriptInput.focus(); return; }
-      if (name.length > 50) { showToast('Max 50 characters', 'warning'); return; }
+    var tvWidgets = [null, null, null];
 
-      // Try parsing as formula first, then as preset name
-      var parsed = FormulaParser.parse(name);
-      if (!parsed) { showToast('Unknown formula. Try: ema(close, 50), rsi(close, 14), bb(close, 20, 2)', 'error'); return; }
+    var TV_INTERVAL_MAP = {
+      '1': '1', '3': '3', '5': '5', '15': '15',
+      '30': '30', '60': '60', '240': '240', 'D': 'D', 'W': 'W',
+    };
 
-      var formula = parsed.formula;
-      var scripts = loadCustomScripts();
-      if (scripts.some(function(s) { return s.formula === formula || s.name === name; })) {
-        showToast('Already added', 'warning'); return;
+    function tvSymbol() {
+      return 'BITUNIX:' + STATE.symbol + '.P';
+    }
+
+    function createTVWidget(idx) {
+      var containerId = 'chart-main-' + idx;
+      var container = document.getElementById(containerId);
+      if (!container) return;
+
+      if (tvWidgets[idx]) {
+        try { tvWidgets[idx].remove(); } catch (_) {}
+        tvWidgets[idx] = null;
       }
+      container.innerHTML = '';
 
-      scripts.push({ name: name, formula: formula });
-      saveCustomScripts(scripts);
-      scriptInput.value = '';
-      renderCustomScripts();
-      recreateAllCharts();
-      indDropdown.classList.add('open');
-      indBtn.classList.add('active');
-      showToast('Added: ' + name, 'success');
+      var interval = TV_INTERVAL_MAP[chartIntervals[idx]] || '15';
+
+      tvWidgets[idx] = new TradingView.widget({
+        autosize: true,
+        symbol: tvSymbol(),
+        interval: interval,
+        timezone: 'Asia/Jakarta',
+        theme: 'dark',
+        style: '1',
+        locale: 'en',
+        toolbar_bg: '#000000',
+        enable_publishing: false,
+        allow_symbol_change: false,
+        container_id: containerId,
+        hide_side_toolbar: false,
+        withdateranges: true,
+        save_image: false,
+        show_popup_button: true,
+        popup_width: '1000',
+        popup_height: '650',
+      });
+    }
+
+    function createAllCharts() {
+      for (var i = 0; i < CHART_COUNT; i++) {
+        createTVWidget(i);
+      }
+    }
+
+    function recreateAllCharts() {
+      for (var i = 0; i < CHART_COUNT; i++) {
+        createTVWidget(i);
+      }
+    }
+
+    function updateAllWidgetSymbols() {
+      var sym = tvSymbol();
+      for (var i = 0; i < CHART_COUNT; i++) {
+        var w = tvWidgets[i];
+        if (!w) { createTVWidget(i); continue; }
+        var interval = TV_INTERVAL_MAP[chartIntervals[i]] || '15';
+        try {
+          w.setSymbol(sym, interval, function() {});
+        } catch (_) {
+          createTVWidget(i);
+        }
+      }
+    }
+
+    function updateWidgetInterval(panelIdx, tvInterval) {
+      var interval = TV_INTERVAL_MAP[tvInterval] || tvInterval;
+      var w = tvWidgets[panelIdx];
+      if (!w) { createTVWidget(panelIdx); return; }
+      try {
+        w.chart().setResolution(interval, function() {});
+      } catch (_) {
+        createTVWidget(panelIdx);
+      }
     }
 
     // ============================================================
@@ -3600,15 +1629,12 @@
       });
       overlay.addEventListener('click', closeMobilePanels);
 
-      // Main toolbar TF buttons — only changes C1 (panel 0), other panels keep their own TF
+      // Main toolbar TF buttons â€” only changes C1 (panel 0)
       document.querySelectorAll('#tf-group .tf-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
-          if (_chartCreating) return; // prevent clicks while charts are loading
           document.querySelectorAll('#tf-group .tf-btn').forEach(function(b) { b.classList.remove('active'); });
           btn.classList.add('active');
           STATE.interval = btn.dataset.tf;
-
-          // Only change panel 0 (C1) — preserve C2/C3 individual TF settings
           chartIntervals[0] = btn.dataset.tvInterval;
           var panel0 = document.querySelector('.chart-panel-tf[data-panel="0"]');
           if (panel0) {
@@ -3616,12 +1642,9 @@
             var match = panel0.querySelector('.panel-tf-btn[data-tv="' + btn.dataset.tvInterval + '"]');
             if (match) match.classList.add('active');
           }
-
-          candleCache.clear();
           saveChartSettings();
-          createChart(0); // only recreate C1
+          updateWidgetInterval(0, btn.dataset.tvInterval);
           loadSmcData();
-          connectWebSocket();
         });
       });
 
@@ -3630,49 +1653,32 @@
         var panelIdx = parseInt(group.dataset.panel);
         group.querySelectorAll('.panel-tf-btn').forEach(function(btn) {
           btn.addEventListener('click', function() {
-            if (_chartCreating) return;
             group.querySelectorAll('.panel-tf-btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             chartIntervals[panelIdx] = btn.dataset.tv;
-            candleCache.clear();
             saveChartSettings();
-            createChart(panelIdx);
-            connectWebSocket();
+            updateWidgetInterval(panelIdx, btn.dataset.tv);
           });
         });
       });
 
       DOM.coinSearch.addEventListener('input', function(e) { renderCoinList(STATE.coins, e.target.value); });
 
-      // Close/reopen panel controls
       function updatePanelLayout() {
         var chartArea = document.getElementById('chart-area');
         var c2closed = document.getElementById('chart-panel-1').classList.contains('collapsed');
         var c3closed = document.getElementById('chart-panel-2').classList.contains('collapsed');
-
         chartArea.classList.toggle('c2-closed', c2closed);
         chartArea.classList.toggle('c3-closed', c3closed);
         chartArea.classList.toggle('has-closed', c2closed || c3closed);
-
-        // Show/hide reopen buttons
         document.querySelector('[data-reopen="1"]').style.display = c2closed ? '' : 'none';
         document.querySelector('[data-reopen="2"]').style.display = c3closed ? '' : 'none';
-
-        // Resize C1 chart after layout change
-        setTimeout(function() {
-          var p0 = chartPanels[0];
-          if (p0 && p0.chart) {
-            var c = document.getElementById('chart-main-0');
-            p0.chart.applyOptions({ width: c.clientWidth, height: c.clientHeight });
-          }
-        }, 50);
       }
 
       document.querySelectorAll('.chart-panel-close').forEach(function(btn) {
         btn.addEventListener('click', function() {
           var idx = parseInt(btn.dataset.closePanel);
-          var panel = document.getElementById('chart-panel-' + idx);
-          panel.classList.add('collapsed');
+          document.getElementById('chart-panel-' + idx).classList.add('collapsed');
           updatePanelLayout();
         });
       });
@@ -3680,49 +1686,18 @@
       document.querySelectorAll('.chart-reopen-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
           var idx = parseInt(btn.dataset.reopen);
-          var panel = document.getElementById('chart-panel-' + idx);
-          panel.classList.remove('collapsed');
+          document.getElementById('chart-panel-' + idx).classList.remove('collapsed');
           updatePanelLayout();
-          // Recreate chart since panel was hidden
-          createChart(idx);
+          createTVWidget(idx);
         });
       });
 
-      // Zoom controls
-      document.querySelectorAll('.chart-zoom-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var idx = parseInt(btn.dataset.panel);
-          var p = chartPanels[idx];
-          if (!p || !p.chart) return;
-          var ts = p.chart.timeScale();
-          var action = btn.dataset.zoom;
-
-          if (action === 'fit') {
-            ts.fitContent();
-            return;
-          }
-
-          var range = ts.getVisibleLogicalRange();
-          if (!range) return;
-          var barsCount = range.to - range.from;
-          var center = (range.from + range.to) / 2;
-          var factor = action === 'in' ? 0.6 : 1.5;
-          var newBars = Math.max(10, barsCount * factor);
-          ts.setVisibleLogicalRange({
-            from: center - newBars / 2,
-            to: center + newBars / 2,
-          });
-        });
-      });
-
-      // Layout toggle (1 or 3 screens)
       document.querySelectorAll('.layout-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
           var layout = btn.dataset.layout;
           var chartArea = document.getElementById('chart-area');
           document.querySelectorAll('.layout-btn').forEach(function(b) { b.classList.remove('active'); });
           btn.classList.add('active');
-
           if (layout === '1') {
             chartArea.classList.add('layout-1');
             chartArea.classList.remove('layout-3');
@@ -3732,7 +1707,6 @@
             chartArea.classList.add('layout-3');
             CHART_COUNT = 3;
           }
-
           saveChartSettings();
           recreateAllCharts();
         });
@@ -3740,54 +1714,8 @@
 
       DOM.bottomPanelToggle.addEventListener('click', function() {
         var isCollapsed = DOM.bottomPanel.classList.toggle('collapsed');
-        DOM.bottomPanelToggle.textContent = isCollapsed ? '\u25B2' : '\u25BC';
+        DOM.bottomPanelToggle.textContent = isCollapsed ? 'â–²' : 'â–¼';
         DOM.bottomPanelToggle.setAttribute('aria-expanded', !isCollapsed);
-      });
-
-      // Indicator Dropdown
-      var indBtn = document.getElementById('btn-indicators');
-      var indDropdown = document.getElementById('indicator-dropdown');
-      var prefs = loadIndicatorPrefs();
-      syncIndicatorUI(prefs);
-      renderCustomScripts();
-
-      indBtn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        var isOpen = indDropdown.classList.toggle('open');
-        indBtn.classList.toggle('active', isOpen);
-      });
-
-      document.addEventListener('click', function(e) {
-        if (!indDropdown.contains(e.target) && e.target !== indBtn) {
-          indDropdown.classList.remove('open'); indBtn.classList.remove('active');
-        }
-      });
-
-      indDropdown.addEventListener('click', function(e) { e.stopPropagation(); });
-
-      indDropdown.querySelectorAll('input[data-ind]').forEach(function(cb) {
-        cb.addEventListener('change', function() {
-          var prefs = loadIndicatorPrefs();
-          prefs[cb.dataset.ind] = cb.checked;
-          saveIndicatorPrefs(prefs);
-          recreateAllCharts();
-        });
-      });
-
-      document.getElementById('ind-all-on').addEventListener('click', function() {
-        var prefs = loadIndicatorPrefs();
-        Object.keys(INDICATOR_MAP).forEach(function(key) { prefs[key] = true; });
-        saveIndicatorPrefs(prefs); syncIndicatorUI(prefs); recreateAllCharts();
-      });
-
-      document.getElementById('ind-all-off').addEventListener('click', function() {
-        var prefs = loadIndicatorPrefs();
-        Object.keys(INDICATOR_MAP).forEach(function(key) { prefs[key] = false; });
-        saveIndicatorPrefs(prefs); syncIndicatorUI(prefs); recreateAllCharts();
-      });
-
-      document.getElementById('script-name-input').addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); addCustomScript(); }
       });
     }
 
@@ -3796,17 +1724,12 @@
     // ============================================================
 
     async function init() {
-      // Restore saved settings to UI
       DOM.toolbarSymbol.textContent = STATE.symbol;
 
-      // Restore main toolbar TF active button
-      var mainTfBtns = document.querySelectorAll('#tf-group .tf-btn');
-      mainTfBtns.forEach(function(b) { b.classList.remove('active'); });
-      var savedTf = STATE.interval || '15m';
-      var matchedTf = document.querySelector('#tf-group .tf-btn[data-tf="' + savedTf + '"]');
+      document.querySelectorAll('#tf-group .tf-btn').forEach(function(b) { b.classList.remove('active'); });
+      var matchedTf = document.querySelector('#tf-group .tf-btn[data-tf="' + (STATE.interval || '15m') + '"]');
       if (matchedTf) matchedTf.classList.add('active');
 
-      // Restore per-panel TF active buttons
       for (var i = 0; i < 3; i++) {
         var tfGroup = document.querySelector('.chart-panel-tf[data-panel="' + i + '"]');
         if (tfGroup && chartIntervals[i]) {
@@ -3816,25 +1739,15 @@
         }
       }
 
-      // Restore layout button active state
       document.querySelectorAll('.layout-btn').forEach(function(b) { b.classList.remove('active'); });
       var layoutMatch = document.querySelector('.layout-btn[data-layout="' + CHART_COUNT + '"]');
       if (layoutMatch) layoutMatch.classList.add('active');
-      if (CHART_COUNT === 1) {
-        document.getElementById('chart-area').classList.add('layout-1');
-      }
-
-      // Restore indicator toggle checkboxes from saved prefs
-      var prefs = loadIndicatorPrefs();
-      document.querySelectorAll('.ind-toggle input[data-ind]').forEach(function(cb) {
-        cb.checked = !!prefs[cb.dataset.ind];
-      });
+      if (CHART_COUNT === 1) document.getElementById('chart-area').classList.add('layout-1');
 
       setupEventListeners();
       createAllCharts();
 
       await Promise.all([loadCoinList(), loadSmcData()]);
-
       startAutoRefresh();
       connectWebSocket();
       connectMiniTickerStream();
