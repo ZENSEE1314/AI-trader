@@ -70,9 +70,8 @@ async function watchSymbol(tvTicker) {
   let indicator;
   try {
     const results = await TradingView.searchIndicator('SMC Pro Suite');
+    bLog(`[SMC-Suite-Watcher][${sym}] Search returned ${results.length} results: ${results.slice(0,3).map(r=>`${r.name}(${r.access})`).join(', ')}`);
     const match = results.find(r =>
-      r.name.toLowerCase().includes('smc pro suite') && r.access === 'private'
-    ) || results.find(r =>
       r.name.toLowerCase().includes('smc pro suite')
     );
 
@@ -80,6 +79,7 @@ async function watchSymbol(tvTicker) {
       bLog(`[SMC-Suite-Watcher][${sym}] Could not find "SMC Pro Suite" indicator on TradingView. ` +
            `Make sure it is saved as a published/private indicator on your account.`);
       client.end();
+      setTimeout(() => watchSymbol(tvTicker), 120_000);
       return;
     }
 
