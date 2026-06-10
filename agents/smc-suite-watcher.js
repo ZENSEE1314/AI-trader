@@ -20,7 +20,7 @@ const bLog = (...args) => console.log('[SMC-Watcher]', ...args);
 // ── Config ──────────────────────────────────────────────────
 const SYMBOLS   = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT.P'];
 const TIMEFRAME = '15';
-const HISTORY_BARS = 200;   // bars fetched for backtesting
+const HISTORY_BARS = 1000;  // ~10 days of 15m bars for backtesting
 const COOLDOWN_MS  = 4 * 60 * 60 * 1000;
 const SCRIPT_ID    = 'USER;5c16ebbf6afb4746a8fc0b693cc3a834';
 
@@ -123,15 +123,15 @@ function runBacktest(periods, pricePeriods, direction) {
     signals.push({ prob, win: pnl > 0 });
   }
 
-  if (signals.length < 5) return { threshold: 40, winRate: null, trades: signals.length };
+  if (signals.length < 3) return { threshold: 40, winRate: null, trades: signals.length };
 
-  // Try thresholds 30–80 in steps of 5; pick the one with best win rate (min 5 trades)
+  // Try thresholds 30–80 in steps of 5; pick the one with best win rate (min 3 trades)
   let bestThreshold = 40;
   let bestWinRate   = 0;
 
   for (let t = 30; t <= 80; t += 5) {
     const subset = signals.filter(s => s.prob >= t);
-    if (subset.length < 5) continue;
+    if (subset.length < 3) continue;
     const wins    = subset.filter(s => s.win).length;
     const winRate = wins / subset.length;
     if (winRate > bestWinRate) {
@@ -265,7 +265,7 @@ async function watchSymbol(tvTicker) {
       }
 
       // Run backtest once we have enough history
-      if (!backtestDone && periods.length >= 50) {
+      if (!backtestDone && periods.length >= 200) {
         backtestDone = true;
         for (const dir of ['LONG', 'SHORT']) {
           const result = runBacktest(periods, pricePeriods, dir);
