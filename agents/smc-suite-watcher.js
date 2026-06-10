@@ -96,27 +96,36 @@ async function watchSymbol(tvTicker) {
 
   let lastSignal = null;
 
+  // Build a name→index map once the study metadata is available
+  let sigLongIdx  = -1;
+  let sigShortIdx = -1;
+  pine.onReady(() => {
+    const plots = pine.studyInputsInfo?.plots || pine.metaInfo?.plots || [];
+    plots.forEach((p, i) => {
+      if (p.id === 'sig_long'  || p.title === 'sig_long')  sigLongIdx  = i;
+      if (p.id === 'sig_short' || p.title === 'sig_short') sigShortIdx = i;
+    });
+    bLog(`[SMC-Suite-Watcher][${sym}] Plot map: sig_long=${sigLongIdx} sig_short=${sigShortIdx}`);
+  });
+
   pine.onUpdate(() => {
     try {
-      // The SMC Pro Suite plots (based on the script outputs):
-      //   plot 0  = longProbability  (0-100)
-      //   plot 1  = shortProbability (0-100)
-      //   plot 2  = sigLong  (1 = signal bar, 0 = no signal)
-      //   plot 3  = sigShort (1 = signal bar, 0 = no signal)
       const periods = pine.periods;
       if (!periods || periods.length === 0) return;
 
       const latest = periods[periods.length - 1];
       if (!latest) return;
 
-      const longProb  = latest[0];
-      const shortProb = latest[1];
-      const sigLong   = latest[2];
-      const sigShort  = latest[3];
+      // Use named plot indices; fall back to legacy positions 2/3 if metadata not ready
+      const lIdx = sigLongIdx  >= 0 ? sigLongIdx  : 2;
+      const sIdx = sigShortIdx >= 0 ? sigShortIdx : 3;
+
+      const sigLong  = latest[lIdx];
+      const sigShort = latest[sIdx];
 
       const price = chart.periods?.[chart.periods.length - 1]?.close;
 
-      // Detect signal — sigLong/sigShort are 1 on the bar the alert fires
+      // Detect signal — 1 on the bar the alert fires
       let direction = null;
       if (sigLong  === 1) direction = 'LONG';
       if (sigShort === 1) direction = 'SHORT';
@@ -128,8 +137,7 @@ async function watchSymbol(tvTicker) {
       lastSignal = direction;
       markTraded(sym, direction);
 
-      const prob = direction === 'LONG' ? longProb : shortProb;
-      bLog(`[SMC-Suite-Watcher] *** ${sym} ${direction} signal! prob=${prob}% price=${price} ***`);
+      bLog(`[SMC-Suite-Watcher] *** ${sym} ${direction} signal! price=${price} ***`);
 
       injectTVSignal({
         symbol:             sym,
