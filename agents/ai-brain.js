@@ -166,7 +166,7 @@ async function think(opts) {
         const is429 = err.message.includes('429') || err.message.includes('413') || err.message.includes('rate limit') || err.message.includes('400');
         if (is429) {
           // Short cooldown only — don't fully mark down
-          groqLastCheck = Date.now() - (HEALTH_RECHECK_MS - 15000); // retry in 15s
+          groqLastCheck = Date.now() - (HEALTH_RECHECK_MS - 20000); // retry in 20s
           groqHealthy = false;
           console.warn(`[AI Brain] Groq 429 — cooling down 15s`);
         } else {
@@ -201,7 +201,7 @@ async function think(opts) {
 
 // Groq rate-limit guard — free tier allows ~30 RPM
 const groqRequestLog = [];
-const GROQ_MAX_RPM = 25; // stay under 30 RPM limit
+const GROQ_MAX_RPM = 20; // stay comfortably under 30 RPM limit
 
 function isGroqRateLimited() {
   const now = Date.now();

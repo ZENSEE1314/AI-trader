@@ -113,7 +113,10 @@ async function runSwarm(symbol, seeds) {
   // Run personas sequentially with delay to avoid overwhelming cloud APIs
   const results = [];
   let consecutiveFailures = 0;
+  let personaIdx = 0;
   for (const key of personaKeys) {
+    if (personaIdx > 0) await new Promise(r => setTimeout(r, 2000)); // 2s gap between calls
+    personaIdx++;
     const persona = PERSONAS[key];
 
     let weight = persona.weight;
