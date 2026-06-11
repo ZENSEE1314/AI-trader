@@ -170,7 +170,17 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
       }
       consecutiveFailures = 0;
 
-      const jsonMatch = response.match(/\{[^{}]*"direction"[^{}]*\}/s);
+      // Extract first JSON object that contains "direction" — handles nested/markdown responses
+      let jsonMatch = null;
+      const jsonCandidates = response.match(/\{[\s\S]*?\}/g) || [];
+      for (const candidate of jsonCandidates) {
+        if (candidate.includes('"direction"')) { jsonMatch = [candidate]; break; }
+      }
+      if (!jsonMatch) {
+        // Last resort: try the whole response if it looks like JSON
+        const trimmed = response.trim();
+        if (trimmed.startsWith('{') && trimmed.includes('"direction"')) jsonMatch = [trimmed];
+      }
       if (!jsonMatch) throw new Error(`No valid signal JSON from ${persona.name}`);
 
       const result = JSON.parse(jsonMatch[0]);

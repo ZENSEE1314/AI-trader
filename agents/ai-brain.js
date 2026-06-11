@@ -232,6 +232,7 @@ async function thinkGroq(agentName, systemPrompt, userMessage) {
         ],
         max_tokens: 256,
         temperature: 0.3,
+        response_format: { type: 'json_object' },
       }),
       signal: controller.signal,
     });
