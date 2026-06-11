@@ -167,8 +167,11 @@ function normalizeSym(tvTicker) {
 // ── Per-symbol dynamic thresholds ───────────────────────────
 const dynamicThreshold = {};  // sym → { long: N, short: N }
 
+const MIN_THRESHOLD = 50;  // never trade below this regardless of backtest
+
 function getThreshold(sym, direction) {
-  return dynamicThreshold[sym]?.[direction.toLowerCase()] ?? 40;
+  const bt = dynamicThreshold[sym]?.[direction.toLowerCase()] ?? MIN_THRESHOLD;
+  return Math.max(bt, MIN_THRESHOLD);
 }
 
 // ── 1m Backtest runner ───────────────────────────────────────

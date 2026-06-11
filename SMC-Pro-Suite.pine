@@ -134,7 +134,7 @@ show_vwap   = input.bool (true,  "Show VWAP + bands",        group=g6)
 
 g7 = "  Display  "
 
-prob_thresh = input.int  (40,   "Signal threshold %",        group=g7, minval=30, maxval=95)
+prob_thresh = input.int  (50,   "Signal threshold %",        group=g7, minval=30, maxval=95)
 
 show_dash   = input.bool (true,  "Dashboard",                 group=g7)
 
