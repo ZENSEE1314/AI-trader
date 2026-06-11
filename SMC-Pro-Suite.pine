@@ -1111,11 +1111,19 @@ rawLong  = _cap4(smcLong)  + _cap4(liqLong)  + _cap4(volLong)  + _cap4(obLong)  
 
 rawShort = _cap4(smcShort) + _cap4(liqShort) + _cap4(volShort) + _cap4(obShort) + _cap4(wtShort)
 
+// Zone confluence bonus — Extreme OS + Bull OB = high-probability reversal (add up to 4 pts)
+// Catches LL bounce setups before BOS confirms, when price is deeply oversold inside demand
+zoneBoostLong  = (wtOSExtreme and inBullOB) ? 4 : (wtOSExtreme and aboveVwap) ? 2 : (wtOS and inBullOB) ? 2 : 0
 
+// Extreme OB + Bear OB = high-probability short reversal
+zoneBoostShort = (wtOBExtreme and inBearOB) ? 4 : (wtOBExtreme and not aboveVwap) ? 2 : (wtOB and inBearOB) ? 2 : 0
 
-probLong  = math.round(rawLong  / 20.0 * 100)
+rawLong  := rawLong  + zoneBoostLong
+rawShort := rawShort + zoneBoostShort
 
-probShort = math.round(rawShort / 20.0 * 100)
+probLong  = math.round(rawLong  / 24.0 * 100)
+
+probShort = math.round(rawShort / 24.0 * 100)
 
 
 
