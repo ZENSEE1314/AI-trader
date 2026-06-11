@@ -173,20 +173,21 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
       }
       consecutiveFailures = 0;
 
-      // Extract first JSON object that contains "direction" — handles nested/markdown responses
-      let jsonMatch = null;
-      const jsonCandidates = response.match(/\{[\s\S]*?\}/g) || [];
-      for (const candidate of jsonCandidates) {
-        if (candidate.includes('"direction"')) { jsonMatch = [candidate]; break; }
-      }
-      if (!jsonMatch) {
-        // Last resort: try the whole response if it looks like JSON
-        const trimmed = response.trim();
-        if (trimmed.startsWith('{') && trimmed.includes('"direction"')) jsonMatch = [trimmed];
-      }
-      if (!jsonMatch) throw new Error(`No valid signal JSON from ${persona.name}`);
+      // Extract direction/confidence/target directly via regex — avoids JSON parse errors
+      // from unescaped quotes in reasoning text
+      const dirMatch = response.match(/"direction"\s*:\s*"(LONG|SHORT|NEUTRAL)"/i);
+      const confMatch = response.match(/"confidence"\s*:\s*(\d+)/);
+      const targetMatch = response.match(/"target"\s*:\s*([\d.]+)/);
+      const reasonMatch = response.match(/"reasoning"\s*:\s*"([^"]{0,200})/);
 
-      const result = JSON.parse(jsonMatch[0]);
+      if (!dirMatch) throw new Error(`No valid signal JSON from ${persona.name}`);
+
+      const result = {
+        direction: dirMatch[1].toUpperCase(),
+        confidence: confMatch ? parseInt(confMatch[1]) : 50,
+        target: targetMatch ? parseFloat(targetMatch[1]) : seeds.current,
+        reasoning: reasonMatch ? reasonMatch[1] : '',
+      };
       if (!result.direction) throw new Error(`Missing direction field from ${persona.name}`);
 
       results.push({

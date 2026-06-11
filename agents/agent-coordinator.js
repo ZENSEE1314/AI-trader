@@ -772,9 +772,10 @@ class AgentCoordinator extends BaseAgent {
         this.sentimentAgent.addActivity('skip', 'Paused — skipping mood check');
       }
 
-      // ── Step 1.5: KronosAgent runs AI predictions (30s max — don't block pipeline) ──
+      // ── Step 1.5: KronosAgent runs AI predictions — throttled to every 5 cycles (~2.5min) ──
       let kronosPredictions = null;
-      if (!this.kronosAgent.paused) {
+      const kronosShouldRun = (this._microCycleCount % 5 === 0);
+      if (!this.kronosAgent.paused && kronosShouldRun) {
         this.currentTask = { description: `Step 2/7: KronosAgent predicting...`, startedAt: Date.now() };
         this.kronosAgent.currentTask = { description: `Scanning ${this.tokenAgents.size} tokens...`, startedAt: Date.now() };
         try {
