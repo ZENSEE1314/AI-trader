@@ -163,8 +163,16 @@ async function think(opts) {
       try {
         text = await thinkGroq(agentName, fullSystem, userMessage, complexity);
       } catch (err) {
-        console.warn(`[AI Brain] Groq failed: ${err.message} — falling back to Ollama`);
-        markGroqDown();
+        const is429 = err.message.includes('429') || err.message.includes('rate limit');
+        if (is429) {
+          // Short cooldown only — don't fully mark down
+          groqLastCheck = Date.now() - (HEALTH_RECHECK_MS - 15000); // retry in 15s
+          groqHealthy = false;
+          console.warn(`[AI Brain] Groq 429 — cooling down 15s`);
+        } else {
+          console.warn(`[AI Brain] Groq failed: ${err.message} — falling back to Ollama`);
+          markGroqDown();
+        }
       }
     }
 
@@ -191,11 +199,25 @@ async function think(opts) {
 
 // ── Groq provider ───────────────────────────────────────────
 
+// Groq rate-limit guard — free tier allows ~30 RPM
+const groqRequestLog = [];
+const GROQ_MAX_RPM = 25; // stay under 30 RPM limit
+
+function isGroqRateLimited() {
+  const now = Date.now();
+  while (groqRequestLog.length && groqRequestLog[0] < now - 60000) groqRequestLog.shift();
+  return groqRequestLog.length >= GROQ_MAX_RPM;
+}
+
 async function thinkGroq(agentName, systemPrompt, userMessage) {
-  const model = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+  if (isGroqRateLimited()) {
+    throw new Error(`Groq rate limit guard: ${groqRequestLog.length}/${GROQ_MAX_RPM} RPM`);
+  }
+  const model = process.env.GROQ_MODEL || 'llama3-8b-8192';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
+    groqRequestLog.push(Date.now());
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -214,6 +236,11 @@ async function thinkGroq(agentName, systemPrompt, userMessage) {
       signal: controller.signal,
     });
     clearTimeout(timeout);
+    if (response.status === 429) {
+      // Rate limited — back off but don't mark permanently down
+      const body = await response.text();
+      throw new Error(`Groq API 429: ${body.substring(0, 80)}`);
+    }
     if (!response.ok) {
       const body = await response.text();
       throw new Error(`Groq API ${response.status}: ${body.substring(0, 120)}`);
