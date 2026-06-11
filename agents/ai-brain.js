@@ -1,24 +1,21 @@
 // ============================================================
-// AI Brain — Ollama-only AI for agent intelligence
+// AI Brain — Groq (primary) + Ollama (fallback)
 //
-// Single provider:
-//   Ollama (Local/Tunnel) — set OLLAMA_URL
-//     - OLLAMA_MODEL      (default: gemma4:31b-cloud)
-//     - OLLAMA_MODEL_HIGH (default: gemma4:31b-cloud)
+// Providers in priority order:
+//   1. Groq (cloud, free tier) — set GROQ_API_KEY
+//        GROQ_MODEL (default: llama-3.1-8b-instant)
+//   2. Ollama (local/tunnel) — set OLLAMA_URL
+//        OLLAMA_MODEL (default: gemma2:2b)
 //
-// Anthropic and Google providers were removed — Anthropic credits
-// were exhausted and Google free-tier quota was permanently capped,
-// both spamming the logs without producing usable signals.  If
-// Ollama is unreachable, AI Brain returns null and callers (which
-// treat AI as optional) skip cleanly.
+// If neither is available, callers skip cleanly (AI is optional).
 // ============================================================
 
 const hermes = require('../hermes-bridge');
 
-// Startup diagnostics — only Ollama is supported
+// Startup diagnostics
+console.log(`[AI Brain] GROQ_API_KEY=${process.env.GROQ_API_KEY ? 'SET' : 'NOT SET'}`);
 console.log(`[AI Brain] OLLAMA_URL=${process.env.OLLAMA_URL || 'NOT SET'}`);
-console.log(`[AI Brain] OLLAMA_MODEL=${process.env.OLLAMA_MODEL || 'gemma4:31b-cloud (default)'}`);
-console.log(`[AI Brain] Provider: Ollama only (Anthropic/Google removed)`);
+console.log(`[AI Brain] Provider: Groq (primary) + Ollama (fallback)`);
 
 // Rate limiting — Ollama (local) virtually unlimited
 const requestLog = [];
@@ -43,19 +40,21 @@ function getCached(key) {
   return null;
 }
 
-// Track Ollama health — if it fails, temporarily fall back to cloud
+// Provider health tracking
 let ollamaHealthy = true;
 let ollamaLastCheck = 0;
-const OLLAMA_HEALTH_RECHECK_MS = 60000; // Re-check every 60s after failure
+let groqHealthy = true;
+let groqLastCheck = 0;
+const HEALTH_RECHECK_MS = 60000;
 
-function getProvider(/* complexity unused — Ollama-only */) {
-  if (!process.env.OLLAMA_URL) return null;
-  if (ollamaHealthy) return 'ollama';
-
-  // Re-check Ollama health periodically — maybe the tunnel came back
-  if (Date.now() - ollamaLastCheck > OLLAMA_HEALTH_RECHECK_MS) {
-    ollamaHealthy = true; // Optimistic — will be set false on next failure
-    return 'ollama';
+function getProvider() {
+  if (process.env.GROQ_API_KEY) {
+    if (groqHealthy) return 'groq';
+    if (Date.now() - groqLastCheck > HEALTH_RECHECK_MS) { groqHealthy = true; return 'groq'; }
+  }
+  if (process.env.OLLAMA_URL) {
+    if (ollamaHealthy) return 'ollama';
+    if (Date.now() - ollamaLastCheck > HEALTH_RECHECK_MS) { ollamaHealthy = true; return 'ollama'; }
   }
   return null;
 }
@@ -67,21 +66,23 @@ function markOllamaDown() {
 }
 
 function markOllamaUp() {
-  if (!ollamaHealthy) {
-    ollamaHealthy = true;
-    console.log('[AI Brain] Ollama is back UP — using local AI');
-  }
+  if (!ollamaHealthy) { ollamaHealthy = true; console.log('[AI Brain] Ollama is back UP'); }
+}
+
+function markGroqDown() {
+  groqHealthy = false;
+  groqLastCheck = Date.now();
+  console.log('[AI Brain] Groq marked DOWN — falling back to Ollama');
 }
 
 function isAvailable() {
-  return !!process.env.OLLAMA_URL && ollamaHealthy;
+  return !!(process.env.GROQ_API_KEY || (process.env.OLLAMA_URL && ollamaHealthy));
 }
 
 function getProviderName() {
-  if (!process.env.OLLAMA_URL) return 'none';
-  const model = process.env.OLLAMA_MODEL || 'gemma4:31b-cloud';
-  const status = ollamaHealthy ? 'UP' : 'DOWN';
-  return `Ollama [${status}] (${model})`;
+  if (process.env.GROQ_API_KEY && groqHealthy) return `Groq (${process.env.GROQ_MODEL || 'llama-3.1-8b-instant'})`;
+  if (process.env.OLLAMA_URL && ollamaHealthy) return `Ollama (${process.env.OLLAMA_MODEL || 'gemma2:2b'})`;
+  return 'none';
 }
 
 /**
@@ -155,38 +156,78 @@ async function think(opts) {
 
   try {
     requestLog.push(Date.now());
-    let text;
-    let attempts = 0;
-    const maxAttempts = 2; // Ollama-only — one retry for transient hiccups
+    let text = null;
 
-    while (attempts < maxAttempts) {
+    // Try Groq first
+    if (process.env.GROQ_API_KEY && groqHealthy) {
       try {
-        text = await thinkOllama(agentName, fullSystem, userMessage, complexity);
-        markOllamaUp();
-        if (text) break;
-        throw new Error('AI returned empty response');
+        text = await thinkGroq(agentName, fullSystem, userMessage, complexity);
       } catch (err) {
-        attempts++;
-        const msg = err.message || '';
-        const isTransient = /(424|500|503|fetch failed|ECONNRESET|ETIMEDOUT|empty response|Could not serve)/i.test(msg);
-        if (isTransient && attempts < maxAttempts) {
-          console.log(`[AI Brain] Transient Ollama error (${msg.substring(0, 80)}) — retrying ${attempts}/${maxAttempts}`);
-          await new Promise(r => setTimeout(r, 1500));
-          continue;
-        }
-        markOllamaDown();
-        throw err;
+        console.warn(`[AI Brain] Groq failed: ${err.message} — falling back to Ollama`);
+        markGroqDown();
       }
     }
 
-    if (text) responseCache.set(cacheKey, { text, ts: Date.now() });
+    // Fall back to Ollama
+    if (!text && process.env.OLLAMA_URL && ollamaHealthy) {
+      try {
+        text = await thinkOllama(agentName, fullSystem, userMessage, complexity);
+        markOllamaUp();
+      } catch (err) {
+        markOllamaDown();
+        console.error(`[AI Brain] Ollama also failed: ${err.message}`);
+      }
+    }
+
+    if (!text) return null;
+    responseCache.set(cacheKey, { text, ts: Date.now() });
     return text;
   } catch (err) {
-    console.error(`[AI Brain] ${agentName} FAILED (ollama): ${err.message}`);
-    return null; // Caller treats AI as optional — null = skip cleanly
+    console.error(`[AI Brain] ${agentName} FAILED: ${err.message}`);
+    return null;
   }
 }
 
+
+// ── Groq provider ───────────────────────────────────────────
+
+async function thinkGroq(agentName, systemPrompt, userMessage) {
+  const model = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+        max_tokens: 512,
+        temperature: 0.3,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Groq API ${response.status}: ${body.substring(0, 120)}`);
+    }
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content || null;
+    console.log(`[AI Brain] ${agentName} Groq responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
+    return text;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ── Ollama provider ──────────────────────────────────────────
 
 // One-time fetch of /api/tags so the next 404 lists which models are
 // actually loaded.  Cached so we don't spam the discovery call.
@@ -204,18 +245,17 @@ async function fetchOllamaTags(baseUrl) {
   } catch (_) { return null; }
 }
 
-// Default chain when OLLAMA_MODEL 404s — tries known-good Ollama Cloud
-// model names in order.  `gemma4:31b-cloud` doesn't exist; `gemma3:27b-cloud`
-// is the latest official Gemma cloud model.
+// Fallback chain for Ollama when configured model 404s
 const FALLBACK_MODELS = [
-  'gemma3:27b-cloud',
-  'gpt-oss:20b-cloud',
-  'qwen3-coder:480b-cloud',
+  'gemma2:2b',
+  'llama3.2:3b',
+  'qwen2.5:3b',
+  'phi3:mini',
 ];
 let _resolvedModel = null;  // sticky once we find one that works
 
 async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'low') {
-  const modelNormal = process.env.OLLAMA_MODEL || 'gemma3:27b-cloud';
+  const modelNormal = process.env.OLLAMA_MODEL || 'gemma2:2b';
   const modelHigh = process.env.OLLAMA_MODEL_HIGH || modelNormal;
   const baseUrl = (process.env.OLLAMA_URL || 'http://localhost:11434').replace(/\/api\/(generate|chat)\/?$/, '');
   const url = `${baseUrl}/api/chat`;
