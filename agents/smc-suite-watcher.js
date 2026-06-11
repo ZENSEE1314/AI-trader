@@ -18,9 +18,10 @@ const { injectTVSignal } = require('../cycle');
 const bLog = (...args) => console.log('[SMC-Watcher]', ...args);
 
 // ── Config ──────────────────────────────────────────────────
-const SYMBOLS   = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT.P'];
-const TIMEFRAME = '15';
-const HISTORY_BARS = 1000;  // ~10 days of 15m bars for backtesting
+const SYMBOLS        = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT.P'];
+const TIMEFRAME      = '15';   // live trading timeframe
+const BT_TIMEFRAME   = '1';    // 1m backtest — more signals, better WR stats
+const HISTORY_BARS   = 5000;   // ~3.5 days of 1m bars for backtest
 const COOLDOWN_MS  = 4 * 60 * 60 * 1000;
 const SCRIPT_ID    = 'USER;5c16ebbf6afb4746a8fc0b693cc3a834';
 
@@ -168,6 +169,106 @@ const dynamicThreshold = {};  // sym → { long: N, short: N }
 
 function getThreshold(sym, direction) {
   return dynamicThreshold[sym]?.[direction.toLowerCase()] ?? 40;
+}
+
+// ── 1m Backtest runner ───────────────────────────────────────
+// Runs once on startup: fetches 5000 1m bars, finds every signal,
+// tests all thresholds, prints a full WR table to the logs.
+
+async function runFullBacktest(tvTicker) {
+  const sym = normalizeSym(tvTicker);
+  bLog(`[${sym}][BT] Loading 1m backtest (${HISTORY_BARS} bars)...`);
+
+  const client = new TradingView.Client();
+  const chart  = new client.Session.Chart();
+  chart.setMarket(tvTicker, { timeframe: BT_TIMEFRAME, range: HISTORY_BARS });
+
+  let indicator;
+  try {
+    indicator = await TradingView.getIndicator(
+      SCRIPT_ID, 'last',
+      process.env.TV_SESSION      || '',
+      process.env.TV_SESSION_SIGN || '',
+    );
+  } catch (err) {
+    bLog(`[${sym}][BT] Failed to load indicator: ${err.message}`);
+    client.end();
+    return;
+  }
+
+  const pine = new chart.Study(indicator);
+
+  await new Promise(resolve => {
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(); } };
+
+    // Wait until we have enough bars or 60s timeout
+    pine.onUpdate(() => {
+      if ((pine.periods?.length ?? 0) >= Math.min(500, HISTORY_BARS * 0.1)) done();
+    });
+    setTimeout(done, 60_000);
+  });
+
+  const periods      = pine.periods      || [];
+  const pricePeriods = chart.periods     || [];
+
+  if (periods.length < 10) {
+    bLog(`[${sym}][BT] Not enough bars (${periods.length}) — skipping`);
+    client.end();
+    return;
+  }
+
+  bLog(`[${sym}][BT] Got ${periods.length} bars on 1m`);
+
+  for (const dir of ['LONG', 'SHORT']) {
+    const sigIdx  = dir === 'LONG' ? IDX.sigLong  : IDX.sigShort;
+    const probIdx = dir === 'LONG' ? IDX.probLong : IDX.probShort;
+
+    const signals = [];
+    for (let i = 0; i < periods.length - 1; i++) {
+      const bar  = periods[i];
+      const next = pricePeriods?.[i + 1];
+      if (!bar || !next) continue;
+      if (bar[sigIdx] !== 1) continue;
+
+      const prob    = bar[probIdx] ?? 50;
+      const entryPx = next.open  ?? 0;
+      const exitPx  = next.close ?? 0;
+      const pnl     = dir === 'LONG' ? exitPx - entryPx : entryPx - exitPx;
+      signals.push({ prob, win: pnl > 0, pnl });
+    }
+
+    if (signals.length === 0) {
+      bLog(`[${sym}][BT] ${dir}: no signals found in ${periods.length} bars`);
+      continue;
+    }
+
+    // Print WR table for every threshold
+    bLog(`[${sym}][BT] ── ${dir} (${signals.length} total signals) ──`);
+    let bestLine = '';
+    let bestWR   = 0;
+    for (let t = 20; t <= 90; t += 5) {
+      const sub   = signals.filter(s => s.prob >= t);
+      if (sub.length === 0) continue;
+      const wins  = sub.filter(s => s.win).length;
+      const wr    = (wins / sub.length * 100).toFixed(1);
+      const bar   = '█'.repeat(Math.round(wins / sub.length * 10)) + '░'.repeat(10 - Math.round(wins / sub.length * 10));
+      const line  = `  thresh=${t}%  trades=${sub.length}  wins=${wins}  WR=${wr}%  ${bar}`;
+      bLog(`[${sym}][BT]${line}`);
+      if (wins / sub.length > bestWR && sub.length >= 3) {
+        bestWR   = wins / sub.length;
+        bestLine = `thresh=${t}%  WR=${wr}%  trades=${sub.length}`;
+      }
+    }
+    bLog(`[${sym}][BT] BEST ${dir}: ${bestLine}`);
+
+    // Apply best threshold to live trading
+    if (!dynamicThreshold[sym]) dynamicThreshold[sym] = { long: 40, short: 40 };
+    dynamicThreshold[sym][dir.toLowerCase()] = parseInt(bestLine.match(/thresh=(\d+)/)?.[1] ?? '40');
+  }
+
+  client.end();
+  bLog(`[${sym}][BT] Done — live thresholds: LONG=${dynamicThreshold[sym]?.long}% SHORT=${dynamicThreshold[sym]?.short}%`);
 }
 
 // ── Main watcher ─────────────────────────────────────────────
@@ -374,6 +475,12 @@ async function watchSymbol(tvTicker) {
 async function start() {
   bLog('Starting — watching BTCUSDT, ETHUSDT, SOLUSDT via TradingView WebSocket');
   bLog(`Initial IDX map: sigLong=${IDX.sigLong} sigShort=${IDX.sigShort} probLong=${IDX.probLong} probShort=${IDX.probShort}`);
+
+  // Run 1m backtests first (in parallel across all symbols)
+  bLog('Running 1m backtests before going live...');
+  await Promise.allSettled(SYMBOLS.map(sym => runFullBacktest(sym)));
+  bLog('Backtests complete — starting live watchers');
+
   for (const sym of SYMBOLS) {
     watchSymbol(sym).catch(err =>
       bLog(`Fatal error for ${sym}: ${err.message}`)
