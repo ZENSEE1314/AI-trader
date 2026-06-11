@@ -163,7 +163,7 @@ async function think(opts) {
       try {
         text = await thinkGroq(agentName, fullSystem, userMessage, complexity);
       } catch (err) {
-        const is429 = err.message.includes('429') || err.message.includes('rate limit');
+        const is429 = err.message.includes('429') || err.message.includes('rate limit') || err.message.includes('400');
         if (is429) {
           // Short cooldown only — don't fully mark down
           groqLastCheck = Date.now() - (HEALTH_RECHECK_MS - 15000); // retry in 15s
@@ -213,7 +213,7 @@ async function thinkGroq(agentName, systemPrompt, userMessage) {
   if (isGroqRateLimited()) {
     throw new Error(`Groq rate limit guard: ${groqRequestLog.length}/${GROQ_MAX_RPM} RPM`);
   }
-  const model = process.env.GROQ_MODEL || 'llama3-8b-8192';
+  const model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
