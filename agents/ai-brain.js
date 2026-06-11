@@ -334,7 +334,7 @@ async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'l
 
   let lastErr = null;
   for (const model of tryOrder) {
-    console.log(`[AI Brain] ${agentName} thinking with Ollama ${model} (${complexity})...`);
+    // Ollama attempt — silent unless it succeeds
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 60000);
@@ -354,11 +354,8 @@ async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'l
       clearTimeout(timeout);
 
       if (response.status === 404) {
-        // Model not loaded.  Discover what IS loaded (once) and log it.
-        const tags = await fetchOllamaTags(baseUrl);
-        console.warn(`[AI Brain] Ollama 404 for model "${model}". Available models: ${tags ? tags.join(', ') || '(none)' : '(tags fetch failed)'}`);
         lastErr = new Error(`Ollama 404: model ${model} not loaded`);
-        continue;  // try next fallback
+        continue;  // try next fallback silently
       }
       if (!response.ok) {
         throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);

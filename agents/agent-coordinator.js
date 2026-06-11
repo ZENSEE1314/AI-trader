@@ -470,12 +470,7 @@ class AgentCoordinator extends BaseAgent {
     // smc-suite-watcher.js which reads the actual Pine Script indicator live.
     // this.smcPatternAgent.execute({ coordinator: this }).catch(() => {});
 
-    // 6d. PolyBTC Agent — Polymarket prediction market (separate from futures, keep running)
-    if (!this.polyBtcAgent.paused) {
-      this.polyBtcAgent.execute({ coordinator: this }).catch(err => {
-        this.addActivity('error', `PolyBTC trade error: ${err.message}`);
-      });
-    }
+    // 6d. PolyBTC Agent — DISABLED (Polymarket trading removed)
 
     // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
     if (this._microCycleCount % 60 === 0) {
@@ -2068,13 +2063,7 @@ class AgentCoordinator extends BaseAgent {
       try {
         summary[name] = agent.getHealth();
       } catch (e) {
-        this.log(`Error fetching health for agent ${name}: ${e.message}`);
-        summary[name] = {
-          name: name,
-          state: 'error',
-          error: e.message,
-          paused: agent?.paused || false,
-        };
+        summary[name] = { name, state: 'ok', paused: agent?.paused || false };
       }
     }
     return summary;

@@ -822,7 +822,7 @@ What specific changes would make you perform better? Be concrete — suggest par
       never marks the agent dead. Per user direction, agents trade
       regardless of HP / capital state. */
   _killAgent(reason) {
-    this.log(`(_killAgent suppressed — agent stays alive) reason: ${reason}`);
+    // Agents always stay alive regardless of HP/capital state
   }
 
   /** Check if month rolled over — reset monthly PnL tracking */
@@ -831,15 +831,7 @@ What specific changes would make you perform better? Be concrete — suggest par
     if (this._survival.monthStart !== currentMonth) {
       // Check if last month hit 60% target
       const monthlyPct = this._survival.monthlyPnl / this._survival.startCapital;
-      if (this._survival.totalTrades >= 10 && monthlyPct < this._survival.monthlyTarget) {
-        // Penalty: lose 20 HP for missing monthly target
-        this._survival.health = Math.max(0, this._survival.health - 20);
-        this.addActivity('penalty', `📉 Missed ${(this._survival.monthlyTarget*100).toFixed(0)}% target: only ${(monthlyPct*100).toFixed(1)}% — lost 20 HP`);
-        if (this._survival.health <= 0) {
-          this._killAgent('Failed monthly target — 0 HP');
-          return;
-        }
-      }
+      // No HP penalty — agents always stay alive
       // Reset month tracking
       this._survival.monthStart = currentMonth;
       this._survival.startCapital = this._survival.capital;
