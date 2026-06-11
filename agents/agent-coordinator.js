@@ -137,7 +137,6 @@ class AgentCoordinator extends BaseAgent {
     this.consensus.registerVoter('chart', { weight: 1.5 });
     this.consensus.registerVoter('risk', { weight: 1.8 });
     this.consensus.registerVoter('sentiment', { weight: 1.0 });
-    this.consensus.registerVoter('kronos', { weight: 1.3 });
     this.consensus.registerVoter('strategy', { weight: 1.2 });
   }
 
@@ -772,28 +771,8 @@ class AgentCoordinator extends BaseAgent {
         this.sentimentAgent.addActivity('skip', 'Paused — skipping mood check');
       }
 
-      // ── Step 1.5: KronosAgent runs AI predictions — throttled to every 5 cycles (~2.5min) ──
-      let kronosPredictions = null;
-      const kronosShouldRun = (this._microCycleCount % 5 === 0);
-      if (!this.kronosAgent.paused && kronosShouldRun) {
-        this.currentTask = { description: `Step 2/7: KronosAgent predicting...`, startedAt: Date.now() };
-        this.kronosAgent.currentTask = { description: `Scanning ${this.tokenAgents.size} tokens...`, startedAt: Date.now() };
-        try {
-          const tokenSymbols = [...this.tokenAgents.keys()].slice(0, 10); // Predict top 10 tokens
-          const kronosResult = await Promise.race([
-            this.kronosAgent.run({ symbols: tokenSymbols, coordinator: this }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Kronos timed out')), 30000)),
-          ]);
-          if (kronosResult?.predictions > 0) {
-            kronosPredictions = this.kronosAgent.lastPredictions;
-            this.addActivity('info', `KronosAgent: ${kronosResult.predictions} predictions (${kronosResult.highConf} high-conf)`);
-          }
-        } catch (kronosErr) {
-          this.addActivity('warning', `KronosAgent skipped: ${kronosErr.message} — pipeline continues without AI predictions`);
-        }
-      } else {
-        this.kronosAgent.addActivity('skip', 'Paused — skipping predictions');
-      }
+      // ── Step 1.5: Kronos — dashboard display only, not used for trade decisions ──
+      const kronosPredictions = null; // Kronos predictions excluded from trade pipeline
 
       // ── Step 2: All TokenAgents scan in parallel ──
       // SMC_ONLY_MODE: skip V4 token scans entirely — SMCProAgent (step 6b) handles everything.
