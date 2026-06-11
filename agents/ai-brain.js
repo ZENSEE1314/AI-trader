@@ -199,9 +199,12 @@ async function think(opts) {
 
 // ── Groq provider ───────────────────────────────────────────
 
-// Groq rate-limit guard — free tier allows ~30 RPM
+// Groq rate-limit guard — free tier: 30 RPM, 6000 TPM
+// Use a simple global queue so concurrent swarm calls are serialized
 const groqRequestLog = [];
-const GROQ_MAX_RPM = 20; // stay comfortably under 30 RPM limit
+const GROQ_MAX_RPM = 15; // conservative — 30 RPM limit but TPM is the real constraint
+let _groqQueueRunning = false;
+const _groqQueue = [];
 
 function isGroqRateLimited() {
   const now = Date.now();
@@ -209,7 +212,29 @@ function isGroqRateLimited() {
   return groqRequestLog.length >= GROQ_MAX_RPM;
 }
 
+// Serialize all Groq calls through a single queue with 3s spacing
+function enqueueGroq(fn) {
+  return new Promise((resolve, reject) => {
+    _groqQueue.push({ fn, resolve, reject });
+    if (!_groqQueueRunning) _drainGroqQueue();
+  });
+}
+
+async function _drainGroqQueue() {
+  _groqQueueRunning = true;
+  while (_groqQueue.length > 0) {
+    const { fn, resolve, reject } = _groqQueue.shift();
+    try { resolve(await fn()); } catch (e) { reject(e); }
+    if (_groqQueue.length > 0) await new Promise(r => setTimeout(r, 3000)); // 3s between calls
+  }
+  _groqQueueRunning = false;
+}
+
 async function thinkGroq(agentName, systemPrompt, userMessage) {
+  return enqueueGroq(() => _callGroq(agentName, systemPrompt, userMessage));
+}
+
+async function _callGroq(agentName, systemPrompt, userMessage) {
   if (isGroqRateLimited()) {
     throw new Error(`Groq rate limit guard: ${groqRequestLog.length}/${GROQ_MAX_RPM} RPM`);
   }
