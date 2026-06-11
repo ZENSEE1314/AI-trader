@@ -12,7 +12,6 @@ const { TokenAgent } = require('./token-agent');
 const { WatcherAgent } = require('./watcher-agent');
 const { KronosAgent } = require('./kronos-agent');
 const { StrategyAgent } = require('./strategy-agent');
-const { PoliceAgent } = require('./police-agent');
 const { CoderAgent } = require('./coder-agent');
 const { OptimizerAgent } = require('./optimizer-agent');
 const { AgentCoordinator, getCoordinator } = require('./agent-coordinator');
@@ -34,7 +33,6 @@ module.exports = {
   WatcherAgent,
   KronosAgent,
   StrategyAgent,
-  PoliceAgent,
   CoderAgent,
   OptimizerAgent,
   AgentCoordinator,

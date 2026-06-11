@@ -20,7 +20,6 @@ const { AccountantAgent } = require('./accountant-agent');
 const { TokenAgent } = require('./token-agent');
 const { KronosAgent } = require('./kronos-agent');
 const { StrategyAgent } = require('./strategy-agent');
-const { PoliceAgent } = require('./police-agent');
 const { CoderAgent } = require('./coder-agent');
 const { OptimizerAgent } = require('./optimizer-agent');
 const { PolymarketAgent } = require('./polymarket-agent');
@@ -60,7 +59,6 @@ class AgentCoordinator extends BaseAgent {
     this.accountantAgent = new AccountantAgent(options);
     this.kronosAgent = new KronosAgent(options);
     this.strategyAgent = new StrategyAgent(options);
-    this.policeAgent = new PoliceAgent(options);
     this.coderAgent = new CoderAgent(options);
     this.optimizerAgent  = new OptimizerAgent(options);
     this.polymarketAgent = new PolymarketAgent(options);
@@ -80,7 +78,6 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('accountant', this.accountantAgent);
     this._agents.set('kronos',     this.kronosAgent);
     this._agents.set('strategy',   this.strategyAgent);
-    this._agents.set('police',     this.policeAgent);
     this._agents.set('coder',      this.coderAgent);
     this._agents.set('optimizer',  this.optimizerAgent);
     this._agents.set('polymarket', this.polymarketAgent);
@@ -321,7 +318,7 @@ class AgentCoordinator extends BaseAgent {
     this.addActivity('info', 'CEO online — always-on mode activated');
 
     // Keep all core agents at their stations permanently
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
     for (const a of coreAgents) {
       if (!a.paused) {
         a.managedByCoordinator = true;
@@ -464,11 +461,6 @@ class AgentCoordinator extends BaseAgent {
       } catch (err) {
         this.addActivity('error', `Swarm Auditor error: ${err.message}`);
       }
-    }
-
-    // 6. Run police patrol (pass coordinator context)
-    if (this._microCycleCount % 2 === 0 && !this.policeAgent.paused) {
-      this.policeAgent.run({ coordinator: this }).catch(() => {});
     }
 
     // 6b. SMC Pro Agent — DISABLED: only SMCPatternAgent (15m+1m rule) trades
@@ -668,15 +660,9 @@ class AgentCoordinator extends BaseAgent {
     }
   }
 
-  // ── Jail Review (for user/admin) ───────────────────────────
-
-  getJailedAgents() {
-    return this.policeAgent.getJailedAgents();
-  }
-
   async releaseAgent(agentKey) {
-    const report = await this.policeAgent.getViolationReport(agentKey);
-    const released = await this.policeAgent.releaseAgent(agentKey, this);
+    const report = null;
+    const released = false;
     if (released) {
       const agent = this._agents.get(agentKey);
       if (agent) {
@@ -704,7 +690,7 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async getViolationReport(agentKey) {
-    return this.policeAgent.getViolationReport(agentKey);
+    return null;
   }
 
   /**
@@ -752,7 +738,7 @@ class AgentCoordinator extends BaseAgent {
     }
 
     // All agents stay permanently managed by CEO loop — just update their tasks
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.marketDecisionAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
     for (const a of coreAgents) {
       if (!a.paused && a.state !== 'jailed') {
         a.managedByCoordinator = true;
@@ -1172,7 +1158,6 @@ class AgentCoordinator extends BaseAgent {
       accountant: this.accountantAgent, accountantagent: this.accountantAgent, 'accountant agent': this.accountantAgent,
       kronos: this.kronosAgent, kronosagent: this.kronosAgent, 'kronos agent': this.kronosAgent, oracle: this.kronosAgent,
       strategy: this.strategyAgent, strategyagent: this.strategyAgent, 'strategy agent': this.strategyAgent, researcher: this.strategyAgent,
-      police: this.policeAgent, policeagent: this.policeAgent, 'police agent': this.policeAgent, 'internal affairs': this.policeAgent,
       coder: this.coderAgent, coderagent: this.coderAgent, 'coder agent': this.coderAgent, engineer: this.coderAgent,
       optimizer: this.optimizerAgent, optimizeragent: this.optimizerAgent, 'optimizer agent': this.optimizerAgent,
     };
@@ -1269,18 +1254,6 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: result.error };
     }
 
-    // Jail review
-    if (/^(jail|prison|jailed|arrested|who.*jail|inmates|prisoners)/.test(text)) {
-      const jailed = this.getJailedAgents();
-      if (!jailed.length) return { from: 'PoliceAgent', message: 'No agents in jail. Everyone is behaving.' };
-      const lines = [`**Prison Report — ${jailed.length} inmate(s)**\n`];
-      for (const j of jailed) {
-        const dur = Math.round((Date.now() - j.jailedAt) / 60000);
-        lines.push(`• **${j.agentKey}** — ${j.reason}\n  Severity: ${j.severity} | In jail ${dur}m | Warnings: ${j.warnings}`);
-      }
-      lines.push(`\nSay "release <agent>" to free an agent.`);
-      return { from: 'PoliceAgent', message: lines.join('\n') };
-    }
 
     // Release from jail
     const releaseMatch = text.match(/^release\s+(\w+)/);
@@ -1290,21 +1263,13 @@ class AgentCoordinator extends BaseAgent {
       let agentKey = null;
       const searchKeys = [key, key + 'Agent', key + 'agent'];
       for (const sk of searchKeys) {
-        if (this._agents.has(sk) || this.policeAgent._jailedAgents.has(sk)) {
+        if (this._agents.has(sk)) {
           agentKey = sk;
           break;
         }
       }
-      if (!agentKey) {
-        // Try matching agent properties like 'chartAgent', 'traderAgent', etc.
-        for (const [jailKey] of this.policeAgent._jailedAgents) {
-          if (jailKey.toLowerCase().includes(key)) { agentKey = jailKey; break; }
-        }
-      }
-      if (!agentKey) return { from: 'PoliceAgent', message: `Agent "${key}" not found in jail.` };
-      const released = await this.releaseAgent(agentKey);
-      if (released) return { from: 'PoliceAgent', message: `Released **${agentKey}** from jail. Agent is back on duty.` };
-      return { from: 'PoliceAgent', message: `Failed to release "${agentKey}".` };
+      if (!agentKey) return { from: 'Coordinator', message: `Agent "${key}" not found.` };
+      return { from: 'Coordinator', message: `Agent "${agentKey}" found but jail system removed.` };
     }
 
     // Backtest
@@ -2088,7 +2053,7 @@ class AgentCoordinator extends BaseAgent {
   }
 
   removeAgent(agentKey) {
-    const core = ['chart', 'trader', 'risk', 'sentiment', 'accountant', 'kronos', 'strategy', 'police', 'coder', 'optimizer'];
+    const core = ['chart', 'trader', 'risk', 'sentiment', 'accountant', 'kronos', 'strategy', 'coder', 'optimizer'];
     if (core.includes(agentKey)) return { ok: false, error: 'Cannot remove core agents' };
     const agent = this._agents.get(agentKey);
     if (!agent) return { ok: false, error: `Agent "${agentKey}" not found` };
@@ -2148,7 +2113,7 @@ class AgentCoordinator extends BaseAgent {
 
       // Revive all agents in memory (they may have loaded dead state)
       const allAgents = [this.traderAgent, this.chartAgent, this.riskAgent, this.kronosAgent,
-        this.sentimentAgent, this.accountantAgent, this.strategyAgent, this.policeAgent,
+        this.sentimentAgent, this.accountantAgent, this.strategyAgent,
         this.coderAgent, this.optimizerAgent];
       for (const agent of allAgents) {
         if (!agent) continue;
