@@ -167,7 +167,7 @@ function normalizeSym(tvTicker) {
 // ── Per-symbol dynamic thresholds ───────────────────────────
 const dynamicThreshold = {};  // sym → { long: N, short: N }
 
-const MIN_THRESHOLD = 20;  // never trade below this regardless of backtest
+const MIN_THRESHOLD = 15;  // never trade below this regardless of backtest
 
 function getThreshold(sym, direction) {
   const bt = dynamicThreshold[sym]?.[direction.toLowerCase()] ?? MIN_THRESHOLD;
@@ -404,10 +404,10 @@ async function watchSymbol(tvTicker, timeframe = '15') {
 
       // Primary: use Pine Script signal if it fired
       // Fallback: fire directly on probability — bypasses Pine's strict MTF gate
-      if (sigLong === 1 || (probL > probS && probL >= 20)) {
+      if (sigLong === 1 || (probL > probS && probL >= 15)) {
         direction = 'LONG';
         features  = { prob: probL, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
-      } else if (sigShort === 1 || (probS > probL && probS >= 20)) {
+      } else if (sigShort === 1 || (probS > probL && probS >= 15)) {
         direction = 'SHORT';
         features  = { prob: probS, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
       }
