@@ -22,7 +22,7 @@ const SYMBOLS        = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUS
 const TIMEFRAMES     = ['15', '1'];  // live trading timeframes (15m + 1m)
 const BT_TIMEFRAME   = '1';         // 1m backtest
 const HISTORY_BARS   = 5000;        // ~3.5 days of 1m bars for backtest
-const COOLDOWN_MS  = 4 * 60 * 60 * 1000;
+const COOLDOWN_MS  = 30 * 60 * 1000;  // 30 min cooldown per symbol per direction
 const SCRIPT_ID    = 'USER;5c16ebbf6afb4746a8fc0b693cc3a834';
 
 // Plot index layout (Pine Script declaration order):
@@ -167,7 +167,7 @@ function normalizeSym(tvTicker) {
 // ── Per-symbol dynamic thresholds ───────────────────────────
 const dynamicThreshold = {};  // sym → { long: N, short: N }
 
-const MIN_THRESHOLD = 50;  // never trade below this regardless of backtest
+const MIN_THRESHOLD = 20;  // never trade below this regardless of backtest
 
 function getThreshold(sym, direction) {
   const bt = dynamicThreshold[sym]?.[direction.toLowerCase()] ?? MIN_THRESHOLD;
@@ -402,10 +402,12 @@ async function watchSymbol(tvTicker, timeframe = '15') {
       let direction = null;
       let features  = null;
 
-      if (sigLong === 1) {
+      // Primary: use Pine Script signal if it fired
+      // Fallback: fire directly on probability — bypasses Pine's strict MTF gate
+      if (sigLong === 1 || (probL > probS && probL >= 20)) {
         direction = 'LONG';
         features  = { prob: probL, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
-      } else if (sigShort === 1) {
+      } else if (sigShort === 1 || (probS > probL && probS >= 20)) {
         direction = 'SHORT';
         features  = { prob: probS, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
       }
