@@ -19,9 +19,9 @@ const bLog = (...args) => console.log('[SMC-Watcher]', ...args);
 
 // ── Config ──────────────────────────────────────────────────
 const SYMBOLS        = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT.P'];
-const TIMEFRAME      = '15';   // live trading timeframe
-const BT_TIMEFRAME   = '1';    // 1m backtest — more signals, better WR stats
-const HISTORY_BARS   = 5000;   // ~3.5 days of 1m bars for backtest
+const TIMEFRAMES     = ['15', '1'];  // live trading timeframes (15m + 1m)
+const BT_TIMEFRAME   = '1';         // 1m backtest
+const HISTORY_BARS   = 5000;        // ~3.5 days of 1m bars for backtest
 const COOLDOWN_MS  = 4 * 60 * 60 * 1000;
 const SCRIPT_ID    = 'USER;5c16ebbf6afb4746a8fc0b693cc3a834';
 
@@ -275,19 +275,19 @@ async function runFullBacktest(tvTicker) {
 }
 
 // ── Main watcher ─────────────────────────────────────────────
-async function watchSymbol(tvTicker) {
+async function watchSymbol(tvTicker, timeframe = '15') {
   const sym = normalizeSym(tvTicker);
-  bLog(`[${sym}] Starting watcher`);
+  bLog(`[${sym}][${timeframe}m] Starting watcher`);
 
   const client = new TradingView.Client();
   client.onError((...err) => {
-    bLog(`[${sym}] TV error: ${err.join(' ')} — reconnecting in 30s`);
+    bLog(`[${sym}][${timeframe}m] TV error: ${err.join(' ')} — reconnecting in 30s`);
     client.end();
-    setTimeout(() => watchSymbol(tvTicker), 30_000);
+    setTimeout(() => watchSymbol(tvTicker, timeframe), 30_000);
   });
 
   const chart = new client.Session.Chart();
-  chart.setMarket(tvTicker, { timeframe: TIMEFRAME, range: HISTORY_BARS });
+  chart.setMarket(tvTicker, { timeframe, range: HISTORY_BARS });
 
   let indicator;
   try {
@@ -296,11 +296,11 @@ async function watchSymbol(tvTicker) {
       process.env.TV_SESSION      || '',
       process.env.TV_SESSION_SIGN || '',
     );
-    bLog(`[${sym}] Loaded: ${indicator.description || 'SMC Pro Suite'}`);
+    bLog(`[${sym}][${timeframe}m] Loaded: ${indicator.description || 'SMC Pro Suite'}`);
   } catch (err) {
-    bLog(`[${sym}] Failed to load indicator: ${err.message} — retrying in 60s`);
+    bLog(`[${sym}][${timeframe}m] Failed to load indicator: ${err.message} — retrying in 60s`);
     client.end();
-    setTimeout(() => watchSymbol(tvTicker), 60_000);
+    setTimeout(() => watchSymbol(tvTicker, timeframe), 60_000);
     return;
   }
 
@@ -417,7 +417,7 @@ async function watchSymbol(tvTicker) {
       const threshold = getThreshold(sym, direction);
       const prob      = features.prob;
 
-      bLog(`[${sym}] Signal ${direction} — prob=${prob}% threshold=${threshold}% smc=${features.smc} liq=${features.liq} ob=${features.ob} wt=${features.wt} trail=${features.trail}`);
+      bLog(`[${sym}][${timeframe}m] Signal ${direction} — prob=${prob}% threshold=${threshold}% smc=${features.smc} liq=${features.liq} ob=${features.ob} wt=${features.wt} trail=${features.trail}`);
 
       // Q-Learning decides whether to act
       const key    = stateKey(features);
@@ -440,7 +440,7 @@ async function watchSymbol(tvTicker) {
       // Remember for reward next bar
       pending.set(sym, { key, action, direction, entryPx: price });
 
-      bLog(`[${sym}] *** TRADING ${direction} price=${price} prob=${prob}% ***`);
+      bLog(`[${sym}][${timeframe}m] *** TRADING ${direction} price=${price} prob=${prob}% ***`);
 
       injectTVSignal({
         symbol:             sym,
@@ -450,10 +450,11 @@ async function watchSymbol(tvTicker) {
         zone:               'SMC_PRO',
         pivot:              'SMC_PRO',
         setup:              'SMC_PRO_SUITE',
-        setupName:          'SMC Pro Suite',
+        setupName:          `SMC Pro Suite (${timeframe}m)`,
         score:              prob,
-        signalType:         `SMC-PRO-${direction}`,
+        signalType:         `SMC-PRO-${direction}-${timeframe}M`,
         source:             'smc-suite-watcher',
+        timeframe,
         isMomentumBreakout: true,
         override:           true,
         receivedAt:         Date.now(),
@@ -467,7 +468,7 @@ async function watchSymbol(tvTicker) {
       });
 
     } catch (err) {
-      bLog(`[${sym}] onUpdate error: ${err.message}`);
+      bLog(`[${sym}][${timeframe}m] onUpdate error: ${err.message}`);
     }
   });
 
@@ -485,10 +486,12 @@ async function start() {
   bLog('Backtests complete — starting live watchers');
 
   for (const sym of SYMBOLS) {
-    watchSymbol(sym).catch(err =>
-      bLog(`Fatal error for ${sym}: ${err.message}`)
-    );
-    await new Promise(r => setTimeout(r, 2000));
+    for (const tf of TIMEFRAMES) {
+      watchSymbol(sym, tf).catch(err =>
+        bLog(`Fatal error for ${sym}[${tf}m]: ${err.message}`)
+      );
+      await new Promise(r => setTimeout(r, 2000));
+    }
   }
 }
 
