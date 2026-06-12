@@ -23,7 +23,7 @@ const TIMEFRAME      = '15';   // live trading timeframe
 const BT_TIMEFRAME   = '1';    // 1m backtest — more signals, better WR stats
 const HISTORY_BARS   = 5000;   // ~3.5 days of 1m bars for backtest
 const COOLDOWN_MS  = 4 * 60 * 60 * 1000;
-const SCRIPT_ID    = 'USER;5c16ebbf6afb4746a8fc0b693cc3a834';
+const SCRIPT_ID    = 'PUB;XHjOoaGa';
 
 // Plot index layout (Pine Script declaration order):
 // 0  VWAP
