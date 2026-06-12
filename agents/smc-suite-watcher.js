@@ -332,8 +332,12 @@ async function watchSymbol(tvTicker, timeframe = '15') {
 
   let backtestDone   = false;
   let debugDumped    = false;
-  let lastSignal     = null;
-  let lastBarClose   = null;
+
+  // Pivot tracking for LH/HL detection
+  let lastPivotHigh   = null;  // { price, barIdx }
+  let lastPivotLow    = null;  // { price, barIdx }
+  let pendingEntry    = null;  // { direction, setOnBarIdx, features } — fires on next confirming candle
+  const PIVOT_LEN     = 3;    // bars each side for pivot detection
 
   pine.onUpdate(() => {
     try {
@@ -341,106 +345,123 @@ async function watchSymbol(tvTicker, timeframe = '15') {
       const pricePeriods = chart.periods;
       if (!periods || periods.length < 2) return;
 
-      const latest     = periods[periods.length - 1];
-      const prevBar    = periods[periods.length - 2];
+      const latest      = periods[periods.length - 1];
       const priceLatest = pricePeriods?.[pricePeriods.length - 1];
+      const n           = pricePeriods?.length ?? 0;
 
-      // Dump all plot values once on first update (to discover indices from logs)
+      // Dump plot indices once on first update
       if (!debugDumped && latest) {
         debugDumped = true;
         const vals = [];
         for (let i = 0; i < 25; i++) vals.push(`[${i}]=${latest[i]}`);
-        bLog(`[${sym}] PLOT DUMP (latest bar): ${vals.join(' ')}`);
+        bLog(`[${sym}][${timeframe}m] PLOT DUMP: ${vals.join(' ')}`);
       }
 
-      // Reward Q-Learning from the previous trade (1 bar later)
-      const pend = pending.get(sym);
+      // Q-Learning reward from previous trade (1 bar later)
+      const pend = pending.get(sym + timeframe);
       if (pend && priceLatest) {
         const curPx = priceLatest.close ?? 0;
         if (pend.entryPx > 0 && curPx > 0) {
-          const pnl    = pend.direction === 'LONG'
-            ? curPx - pend.entryPx
-            : pend.entryPx - curPx;
+          const pnl    = pend.direction === 'LONG' ? curPx - pend.entryPx : pend.entryPx - curPx;
           const reward = pnl > 0 ? 1 : -1;
           qUpdate(pend.key, pend.action, reward);
-          bLog(`[${sym}] Q-update: dir=${pend.direction} reward=${reward} (entry=${pend.entryPx} close=${curPx})`);
+          bLog(`[${sym}][${timeframe}m] Q-update: dir=${pend.direction} reward=${reward}`);
         }
-        pending.delete(sym);
+        pending.delete(sym + timeframe);
       }
 
-      // Run backtest once we have enough history
-      if (!backtestDone && periods.length >= 200) {
-        backtestDone = true;
-        for (const dir of ['LONG', 'SHORT']) {
-          const result = runBacktest(periods, pricePeriods, dir);
-          if (!dynamicThreshold[sym]) dynamicThreshold[sym] = { long: 40, short: 40 };
-          dynamicThreshold[sym][dir.toLowerCase()] = result.threshold;
-          bLog(`[${sym}] Backtest ${dir}: threshold=${result.threshold}% winRate=${
-            result.winRate != null ? (result.winRate * 100).toFixed(1) + '%' : 'n/a'
-          } (${result.trades} signals in ${periods.length} bars)`);
+      if (n < PIVOT_LEN * 2 + 2) return;
+
+      // Extract SMC feature state from Pine indicator for signal quality scoring
+      const probL = latest[IDX.probLong]  ?? 0;
+      const probS = latest[IDX.probShort] ?? 0;
+      const smcL  = Math.round(latest[IDX.smcL]  ?? 0);
+      const smcS  = Math.round(latest[IDX.smcS]  ?? 0);
+      const liqL  = Math.round(latest[IDX.liqL]  ?? 0);
+      const liqS  = Math.round(latest[IDX.liqS]  ?? 0);
+      const obL   = Math.round(latest[IDX.obL]   ?? 0);
+      const obS   = Math.round(latest[IDX.obS]   ?? 0);
+      const wtL   = Math.round(latest[IDX.wtL]   ?? 0);
+      const wtS   = Math.round(latest[IDX.wtS]   ?? 0);
+      const trail = Math.round(latest[IDX.trailDir] ?? 0);
+      const price = priceLatest?.close ?? 0;
+
+      // ── Pivot detection: LH / HL on price data ──────────────────
+      // Check if bar at (n - PIVOT_LEN - 1) is a confirmed pivot high/low
+      const pivIdx = n - PIVOT_LEN - 1;
+      const pivBar = pricePeriods[pivIdx];
+      if (pivBar) {
+        let isPivHigh = true, isPivLow = true;
+        for (let i = pivIdx - PIVOT_LEN; i <= pivIdx + PIVOT_LEN; i++) {
+          if (i === pivIdx) continue;
+          const b = pricePeriods[i];
+          if (!b) continue;
+          if (b.high >= pivBar.high) isPivHigh = false;
+          if (b.low  <= pivBar.low)  isPivLow  = false;
+        }
+
+        if (isPivHigh) {
+          if (lastPivotHigh && pivBar.high < lastPivotHigh.price) {
+            // LH confirmed → arm SHORT entry, wait for next candle confirmation
+            const feats = { prob: probS || 50, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
+            pendingEntry = { direction: 'SHORT', setOnBarIdx: n, features: feats };
+            bLog(`[${sym}][${timeframe}m] LH detected (${lastPivotHigh.price.toFixed(2)} → ${pivBar.high.toFixed(2)}) — waiting next candle`);
+          }
+          lastPivotHigh = { price: pivBar.high, barIdx: pivIdx };
+        }
+
+        if (isPivLow) {
+          if (lastPivotLow && pivBar.low > lastPivotLow.price) {
+            // HL confirmed → arm LONG entry, wait for next candle confirmation
+            const feats = { prob: probL || 50, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
+            pendingEntry = { direction: 'LONG', setOnBarIdx: n, features: feats };
+            bLog(`[${sym}][${timeframe}m] HL detected (${lastPivotLow.price.toFixed(2)} → ${pivBar.low.toFixed(2)}) — waiting next candle`);
+          }
+          lastPivotLow = { price: pivBar.low, barIdx: pivIdx };
         }
       }
 
-      // Check signals on latest bar
-      const sigLong  = latest[IDX.sigLong];
-      const sigShort = latest[IDX.sigShort];
+      // ── Next-candle confirmation ─────────────────────────────────
+      if (!pendingEntry || n <= pendingEntry.setOnBarIdx) return;
 
-      // Extract AI feature state
-      const probL   = latest[IDX.probLong]  ?? 50;
-      const probS   = latest[IDX.probShort] ?? 50;
-      const smcL    = Math.round(latest[IDX.smcL]  ?? 0);
-      const smcS    = Math.round(latest[IDX.smcS]  ?? 0);
-      const liqL    = Math.round(latest[IDX.liqL]  ?? 0);
-      const liqS    = Math.round(latest[IDX.liqS]  ?? 0);
-      const obL     = Math.round(latest[IDX.obL]   ?? 0);
-      const obS     = Math.round(latest[IDX.obS]   ?? 0);
-      const wtL     = Math.round(latest[IDX.wtL]   ?? 0);
-      const wtS     = Math.round(latest[IDX.wtS]   ?? 0);
-      const trail   = Math.round(latest[IDX.trailDir] ?? 0);
-      const price   = priceLatest?.close ?? 0;
+      const confirmBar = priceLatest;
+      if (!confirmBar) return;
+      const isBearish  = confirmBar.close < confirmBar.open;
+      const isBullish  = confirmBar.close > confirmBar.open;
+      const confirmed  = (pendingEntry.direction === 'SHORT' && isBearish)
+                      || (pendingEntry.direction === 'LONG'  && isBullish);
 
-      let direction = null;
-      let features  = null;
-
-      // Primary: use Pine Script signal if it fired
-      // Fallback: fire directly on probability — bypasses Pine's strict MTF gate
-      if (sigLong === 1 || (probL > probS && probL >= 15)) {
-        direction = 'LONG';
-        features  = { prob: probL, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
-      } else if (sigShort === 1 || (probS > probL && probS >= 15)) {
-        direction = 'SHORT';
-        features  = { prob: probS, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
+      // Cancel if no confirm within 3 bars
+      if (n > pendingEntry.setOnBarIdx + 3) {
+        bLog(`[${sym}][${timeframe}m] ${pendingEntry.direction} entry expired (no confirmation)`);
+        pendingEntry = null;
+        return;
       }
 
-      if (!direction) { lastSignal = null; return; }
-      if (direction === lastSignal) return;  // same bar, don't double-fire
+      if (!confirmed) return;
+
+      const direction = pendingEntry.direction;
+      const features  = pendingEntry.features;
+      pendingEntry = null;
+
       if (!canTrade(sym, direction)) return;
 
-      const threshold = getThreshold(sym, direction);
-      const prob      = features.prob;
-
-      bLog(`[${sym}][${timeframe}m] Signal ${direction} — prob=${prob}% threshold=${threshold}% smc=${features.smc} liq=${features.liq} ob=${features.ob} wt=${features.wt} trail=${features.trail}`);
+      bLog(`[${sym}][${timeframe}m] Signal ${direction} — LH/HL + next-candle confirmed — prob=${features.prob}%`);
 
       // Q-Learning decides whether to act
       const key    = stateKey(features);
       const action = qAction(key);
-
-      if (prob < threshold) {
-        bLog(`[${sym}] Skipped (prob ${prob}% < threshold ${threshold}%)`);
-        qUpdate(key, action, -0.5);  // mild negative for low-prob skip
-        return;
-      }
+      const prob   = features.prob;
 
       if (action === 0) {
-        bLog(`[${sym}] Q-Learning said SKIP (epsilon=${EPSILON.toFixed(3)})`);
+        bLog(`[${sym}][${timeframe}m] Q-Learning said SKIP (epsilon=${EPSILON.toFixed(3)})`);
         return;
       }
 
-      lastSignal = direction;
       markTraded(sym, direction);
 
       // Remember for reward next bar
-      pending.set(sym, { key, action, direction, entryPx: price });
+      pending.set(sym + timeframe, { key, action, direction, entryPx: price });
 
       bLog(`[${sym}][${timeframe}m] *** TRADING ${direction} price=${price} prob=${prob}% ***`);
 
@@ -450,9 +471,9 @@ async function watchSymbol(tvTicker, timeframe = '15') {
         direction,
         price,
         zone:               'SMC_PRO',
-        pivot:              'SMC_PRO',
+        pivot:              'LH_HL',
         setup:              'SMC_PRO_SUITE',
-        setupName:          `SMC Pro Suite (${timeframe}m)`,
+        setupName:          `SMC LH/HL (${timeframe}m)`,
         score:              prob,
         signalType:         `SMC-PRO-${direction}-${timeframe}M`,
         source:             'smc-suite-watcher',
@@ -462,9 +483,12 @@ async function watchSymbol(tvTicker, timeframe = '15') {
         receivedAt:         Date.now(),
         // AI metadata for the Q-Learning coordinator
         aiFeatures: {
-          probLong:  probL, probShort: probS,
-          smcL, smcS, liqL, liqS, obL, obS, wtL, wtS, trail,
-          threshold,
+          probLong: features.prob, probShort: features.prob,
+          smcL: features.smc, smcS: features.smc,
+          liqL: features.liq, liqS: features.liq,
+          obL: features.ob,   obS: features.ob,
+          wtL: features.wt,   wtS: features.wt,
+          trail: features.trail,
           qEpsilon: parseFloat(EPSILON.toFixed(4)),
         },
       });
@@ -473,9 +497,6 @@ async function watchSymbol(tvTicker, timeframe = '15') {
       bLog(`[${sym}][${timeframe}m] onUpdate error: ${err.message}`);
     }
   });
-
-  // Reset lastSignal each new bar
-  chart.onUpdate(() => { lastSignal = null; });
 }
 
 async function start() {
