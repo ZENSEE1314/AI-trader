@@ -144,6 +144,13 @@ function runBacktest(periods, pricePeriods, direction) {
   return { threshold: bestThreshold, winRate: bestWinRate, trades: signals.length };
 }
 
+// ── Cross-TF state: 15m structure must be confirmed before 1m can trade ──
+// Step 1+2: 15m LH (SHORT) or HL (LONG) detected → stored here
+// Step 3:   1m LH/HL in same direction → pendingEntry armed
+// Step 4:   next 1m candle confirms direction → trade fires
+const _tf15mStructure = new Map();  // sym → { direction, detectedAt, features }
+const TF15M_EXPIRY_MS = 4 * 60 * 60 * 1000;  // 4h — discard stale 15m structure
+
 // ── Pending trades for Q-Learning reward assignment ──────────
 // When we trade, remember the state+action so we can reward it next bar.
 const pending = new Map();  // sym → { key, action, direction, entryPx }
@@ -387,7 +394,10 @@ async function watchSymbol(tvTicker, timeframe = '15') {
       const price = priceLatest?.close ?? 0;
 
       // ── Pivot detection: LH / HL on price data ──────────────────
-      // Check if bar at (n - PIVOT_LEN - 1) is a confirmed pivot high/low
+      // 4-step rule:
+      //   Step 1+2 (15m): detect LH → SHORT structure / HL → LONG structure
+      //   Step 3   (1m):  detect LH/HL matching 15m direction → arm pending entry
+      //   Step 4   (1m):  next candle confirms direction → fire trade
       const pivIdx = n - PIVOT_LEN - 1;
       const pivBar = pricePeriods[pivIdx];
       if (pivBar) {
@@ -400,24 +410,52 @@ async function watchSymbol(tvTicker, timeframe = '15') {
           if (b.low  <= pivBar.low)  isPivLow  = false;
         }
 
-        if (isPivHigh) {
-          if (lastPivotHigh && pivBar.high < lastPivotHigh.price) {
-            // LH confirmed → arm SHORT entry, wait for next candle confirmation
-            const feats = { prob: probS || 50, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
-            pendingEntry = { direction: 'SHORT', setOnBarIdx: n, features: feats };
-            bLog(`[${sym}][${timeframe}m] LH detected (${lastPivotHigh.price.toFixed(2)} → ${pivBar.high.toFixed(2)}) — waiting next candle`);
+        if (timeframe === '15') {
+          // 15m watcher: confirm structure, store cross-TF state (no direct trade)
+          if (isPivHigh) {
+            if (lastPivotHigh && pivBar.high < lastPivotHigh.price) {
+              const feats = { prob: probS || 50, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
+              _tf15mStructure.set(sym, { direction: 'SHORT', detectedAt: Date.now(), features: feats });
+              bLog(`[${sym}][15m] 15m LH confirmed (${lastPivotHigh.price.toFixed(2)} → ${pivBar.high.toFixed(2)}) — SHORT structure armed, waiting for 1m LH`);
+            }
+            lastPivotHigh = { price: pivBar.high, barIdx: pivIdx };
           }
-          lastPivotHigh = { price: pivBar.high, barIdx: pivIdx };
-        }
-
-        if (isPivLow) {
-          if (lastPivotLow && pivBar.low > lastPivotLow.price) {
-            // HL confirmed → arm LONG entry, wait for next candle confirmation
-            const feats = { prob: probL || 50, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
-            pendingEntry = { direction: 'LONG', setOnBarIdx: n, features: feats };
-            bLog(`[${sym}][${timeframe}m] HL detected (${lastPivotLow.price.toFixed(2)} → ${pivBar.low.toFixed(2)}) — waiting next candle`);
+          if (isPivLow) {
+            if (lastPivotLow && pivBar.low > lastPivotLow.price) {
+              const feats = { prob: probL || 50, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
+              _tf15mStructure.set(sym, { direction: 'LONG', detectedAt: Date.now(), features: feats });
+              bLog(`[${sym}][15m] 15m HL confirmed (${lastPivotLow.price.toFixed(2)} → ${pivBar.low.toFixed(2)}) — LONG structure armed, waiting for 1m HL`);
+            }
+            lastPivotLow = { price: pivBar.low, barIdx: pivIdx };
           }
-          lastPivotLow = { price: pivBar.low, barIdx: pivIdx };
+        } else {
+          // 1m watcher: require matching 15m structure before arming entry
+          if (isPivHigh) {
+            if (lastPivotHigh && pivBar.high < lastPivotHigh.price) {
+              const tf15m = _tf15mStructure.get(sym);
+              if (tf15m && tf15m.direction === 'SHORT' && Date.now() - tf15m.detectedAt < TF15M_EXPIRY_MS) {
+                const feats = { prob: tf15m.features.prob, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
+                pendingEntry = { direction: 'SHORT', setOnBarIdx: n, features: feats };
+                bLog(`[${sym}][1m] 1m LH ✓ + 15m LH ✓ → SHORT pending (waiting next candle)`);
+              } else {
+                bLog(`[${sym}][1m] 1m LH detected — no matching 15m SHORT structure, skipping`);
+              }
+            }
+            lastPivotHigh = { price: pivBar.high, barIdx: pivIdx };
+          }
+          if (isPivLow) {
+            if (lastPivotLow && pivBar.low > lastPivotLow.price) {
+              const tf15m = _tf15mStructure.get(sym);
+              if (tf15m && tf15m.direction === 'LONG' && Date.now() - tf15m.detectedAt < TF15M_EXPIRY_MS) {
+                const feats = { prob: tf15m.features.prob, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
+                pendingEntry = { direction: 'LONG', setOnBarIdx: n, features: feats };
+                bLog(`[${sym}][1m] 1m HL ✓ + 15m HL ✓ → LONG pending (waiting next candle)`);
+              } else {
+                bLog(`[${sym}][1m] 1m HL detected — no matching 15m LONG structure, skipping`);
+              }
+            }
+            lastPivotLow = { price: pivBar.low, barIdx: pivIdx };
+          }
         }
       }
 
