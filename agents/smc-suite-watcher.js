@@ -393,11 +393,30 @@ async function watchSymbol(tvTicker, timeframe = '15') {
       const trail = Math.round(latest[IDX.trailDir] ?? 0);
       const price = priceLatest?.close ?? 0;
 
-      // ── Pivot detection: LH / HL on price data ──────────────────
-      // 4-step rule:
-      //   Step 1+2 (15m): detect LH → SHORT structure / HL → LONG structure
-      //   Step 3   (1m):  detect LH/HL matching 15m direction → arm pending entry
-      //   Step 4   (1m):  next candle confirms direction → fire trade
+      // ── 4-step SMC rule ──────────────────────────────────────────
+      // Step 1+2 (15m): indicator fires sig_long/sig_short at the exact HL/LH bar
+      //                 → arm _tf15mStructure immediately (no pivot-lag)
+      // Step 3   (1m):  price-based LH/HL pivot in same direction gates on 15m state
+      // Step 4   (1m):  next candle confirms direction → trade fires
+
+      if (timeframe === '15') {
+        // Use the indicator's own signal — fires at the correct bar with no lag
+        const sigL = latest[IDX.sigLong]  === 1;
+        const sigS = latest[IDX.sigShort] === 1;
+        if (sigL) {
+          const feats = { prob: probL || 50, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
+          _tf15mStructure.set(sym, { direction: 'LONG', detectedAt: Date.now(), features: feats });
+          bLog(`[${sym}][15m] sig_long fired → LONG structure armed, waiting for 1m HL`);
+        }
+        if (sigS) {
+          const feats = { prob: probS || 50, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
+          _tf15mStructure.set(sym, { direction: 'SHORT', detectedAt: Date.now(), features: feats });
+          bLog(`[${sym}][15m] sig_short fired → SHORT structure armed, waiting for 1m LH`);
+        }
+        return; // 15m never fires trades directly
+      }
+
+      // 1m watcher: price-based LH/HL pivot detection, gated on 15m structure
       const pivIdx = n - PIVOT_LEN - 1;
       const pivBar = pricePeriods[pivIdx];
       if (pivBar) {
@@ -410,52 +429,30 @@ async function watchSymbol(tvTicker, timeframe = '15') {
           if (b.low  <= pivBar.low)  isPivLow  = false;
         }
 
-        if (timeframe === '15') {
-          // 15m watcher: confirm structure, store cross-TF state (no direct trade)
-          if (isPivHigh) {
-            if (lastPivotHigh && pivBar.high < lastPivotHigh.price) {
-              const feats = { prob: probS || 50, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
-              _tf15mStructure.set(sym, { direction: 'SHORT', detectedAt: Date.now(), features: feats });
-              bLog(`[${sym}][15m] 15m LH confirmed (${lastPivotHigh.price.toFixed(2)} → ${pivBar.high.toFixed(2)}) — SHORT structure armed, waiting for 1m LH`);
+        if (isPivHigh) {
+          if (lastPivotHigh && pivBar.high < lastPivotHigh.price) {
+            const tf15m = _tf15mStructure.get(sym);
+            if (tf15m && tf15m.direction === 'SHORT' && Date.now() - tf15m.detectedAt < TF15M_EXPIRY_MS) {
+              pendingEntry = { direction: 'SHORT', setOnBarIdx: n, features: tf15m.features };
+              bLog(`[${sym}][1m] 1m LH ✓ + 15m SHORT ✓ → SHORT pending (waiting next candle)`);
+            } else {
+              bLog(`[${sym}][1m] 1m LH — no matching 15m SHORT structure, skipping`);
             }
-            lastPivotHigh = { price: pivBar.high, barIdx: pivIdx };
           }
-          if (isPivLow) {
-            if (lastPivotLow && pivBar.low > lastPivotLow.price) {
-              const feats = { prob: probL || 50, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
-              _tf15mStructure.set(sym, { direction: 'LONG', detectedAt: Date.now(), features: feats });
-              bLog(`[${sym}][15m] 15m HL confirmed (${lastPivotLow.price.toFixed(2)} → ${pivBar.low.toFixed(2)}) — LONG structure armed, waiting for 1m HL`);
+          lastPivotHigh = { price: pivBar.high, barIdx: pivIdx };
+        }
+
+        if (isPivLow) {
+          if (lastPivotLow && pivBar.low > lastPivotLow.price) {
+            const tf15m = _tf15mStructure.get(sym);
+            if (tf15m && tf15m.direction === 'LONG' && Date.now() - tf15m.detectedAt < TF15M_EXPIRY_MS) {
+              pendingEntry = { direction: 'LONG', setOnBarIdx: n, features: tf15m.features };
+              bLog(`[${sym}][1m] 1m HL ✓ + 15m LONG ✓ → LONG pending (waiting next candle)`);
+            } else {
+              bLog(`[${sym}][1m] 1m HL — no matching 15m LONG structure, skipping`);
             }
-            lastPivotLow = { price: pivBar.low, barIdx: pivIdx };
           }
-        } else {
-          // 1m watcher: require matching 15m structure before arming entry
-          if (isPivHigh) {
-            if (lastPivotHigh && pivBar.high < lastPivotHigh.price) {
-              const tf15m = _tf15mStructure.get(sym);
-              if (tf15m && tf15m.direction === 'SHORT' && Date.now() - tf15m.detectedAt < TF15M_EXPIRY_MS) {
-                const feats = { prob: tf15m.features.prob, smc: smcS, liq: liqS, ob: obS, wt: wtS, trail: -trail };
-                pendingEntry = { direction: 'SHORT', setOnBarIdx: n, features: feats };
-                bLog(`[${sym}][1m] 1m LH ✓ + 15m LH ✓ → SHORT pending (waiting next candle)`);
-              } else {
-                bLog(`[${sym}][1m] 1m LH detected — no matching 15m SHORT structure, skipping`);
-              }
-            }
-            lastPivotHigh = { price: pivBar.high, barIdx: pivIdx };
-          }
-          if (isPivLow) {
-            if (lastPivotLow && pivBar.low > lastPivotLow.price) {
-              const tf15m = _tf15mStructure.get(sym);
-              if (tf15m && tf15m.direction === 'LONG' && Date.now() - tf15m.detectedAt < TF15M_EXPIRY_MS) {
-                const feats = { prob: tf15m.features.prob, smc: smcL, liq: liqL, ob: obL, wt: wtL, trail };
-                pendingEntry = { direction: 'LONG', setOnBarIdx: n, features: feats };
-                bLog(`[${sym}][1m] 1m HL ✓ + 15m HL ✓ → LONG pending (waiting next candle)`);
-              } else {
-                bLog(`[${sym}][1m] 1m HL detected — no matching 15m LONG structure, skipping`);
-              }
-            }
-            lastPivotLow = { price: pivBar.low, barIdx: pivIdx };
-          }
+          lastPivotLow = { price: pivBar.low, barIdx: pivIdx };
         }
       }
 
@@ -484,24 +481,13 @@ async function watchSymbol(tvTicker, timeframe = '15') {
 
       if (!canTrade(sym, direction)) return;
 
-      bLog(`[${sym}][${timeframe}m] Signal ${direction} — LH/HL + next-candle confirmed — prob=${features.prob}%`);
-
-      // Q-Learning decides whether to act
-      const key    = stateKey(features);
-      const action = qAction(key);
-      const prob   = features.prob;
-
-      if (action === 0) {
-        bLog(`[${sym}][${timeframe}m] Q-Learning said SKIP (epsilon=${EPSILON.toFixed(3)})`);
-        return;
-      }
+      bLog(`[${sym}][1m] *** TRADING ${direction} price=${price} — 15m+1m SMC structure confirmed ***`);
 
       markTraded(sym, direction);
 
-      // Remember for reward next bar
-      pending.set(sym + timeframe, { key, action, direction, entryPx: price });
-
-      bLog(`[${sym}][${timeframe}m] *** TRADING ${direction} price=${price} prob=${prob}% ***`);
+      // Q-Learning reward bookkeeping (still records outcome for future learning)
+      const key = stateKey(features);
+      pending.set(sym + timeframe, { key, action: 1, direction, entryPx: price });
 
       injectTVSignal({
         symbol:             sym,
@@ -512,7 +498,7 @@ async function watchSymbol(tvTicker, timeframe = '15') {
         pivot:              'LH_HL',
         setup:              'SMC_PRO_SUITE',
         setupName:          `SMC LH/HL (${timeframe}m)`,
-        score:              prob,
+        score:              features.prob,
         signalType:         `SMC-PRO-${direction}-${timeframe}M`,
         source:             'smc-suite-watcher',
         timeframe,
