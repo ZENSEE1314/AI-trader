@@ -1534,20 +1534,16 @@ async function main() {
     //        BELOW_LOWER + any HL/LL on both TFs → LONG
     const signals = [];
 
-    // ── TradingView webhook signals DISABLED ──
-    // TV webhooks bypassed the 4-step SMC rule and fired wrong trades.
-    // All signals now flow exclusively through SMCPatternAgent.
+    // ── SMC Suite Watcher signals ──
+    // Signals injected by smc-suite-watcher.js (TradingView Pine Script WebSocket + Q-Learning).
+    // These are already filtered — only fire when Q-table says trade probability is high enough.
     if (_tvSignalQueue.size > 0) {
-      bLog.scan(`TV-Webhook: ${_tvSignalQueue.size} queued signal(s) DISCARDED — SMCPatternAgent is sole source`);
-      _tvSignalQueue.clear(); // drain without executing
+      for (const [, sig] of _tvSignalQueue) {
+        signals.push(sig);
+      }
+      bLog.scan(`SMC-Suite: ${_tvSignalQueue.size} signal(s) queued → processing`);
+      _tvSignalQueue.clear();
     }
-
-    // ── Internal strategy scans DISABLED ──
-    // All signals now come exclusively from SMCPatternAgent (smc-engine.js)
-    // which enforces the strict 15m LL→LH→1m LH→SHORT / HH→HL→1m HL→LONG rule.
-    // The old scanV4SMC and scanHommaSMC have been removed to prevent
-    // them firing trades without proper 15m confirmation.
-    bLog.scan('Internal scan: disabled — signals from SMCPatternAgent only');
 
     if (!signals.length) {
       log('No AI signals found this cycle — agents still learning.');
