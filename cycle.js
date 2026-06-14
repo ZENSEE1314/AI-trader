@@ -2112,11 +2112,12 @@ async function executeForAllUsers(pick) {
         const isLong = pick.direction !== 'SHORT';
         const patternText = `${pick.pattern15 || ''} ${pick.setupName || ''} ${pick.smcContext?.pattern || ''}`;
         const isProfessionalBacktestSetup =
-          (symbol === 'BTCUSDT' || symbol === 'ETHUSDT') &&
+          pick.strategy === 'VWAP_PULLBACK' ||   // ← VWAP pullback always allowed (OOS-validated)
+          ((symbol === 'BTCUSDT' || symbol === 'ETHUSDT') &&
           (
             (!isLong && patternText.includes('LL') && patternText.includes('LH')) ||
             ( isLong && patternText.includes('HH') && patternText.includes('HL'))
-          );
+          ));
         if (PROFESSIONAL_STRATEGY_ONLY && !isProfessionalBacktestSetup) {
           userLog.trade(
             `User ${key.email}: blocked by professional mode — only BTC/ETH SHORT 15m LL->LH is allowed ` +
@@ -2161,9 +2162,13 @@ async function executeForAllUsers(pick) {
 
         let dirSl  = activeVer?.[dirSlKey]  != null && parseFloat(activeVer[dirSlKey])  > 0 ? parseFloat(activeVer[dirSlKey])  : globalSl;
         let dirTp  = activeVer?.[dirTpKey]  != null && parseFloat(activeVer[dirTpKey])  > 0 ? parseFloat(activeVer[dirTpKey])  : globalTp;
-        if (isProfessionalBacktestSetup) {
+        if (isProfessionalBacktestSetup && pick.strategy !== 'VWAP_PULLBACK') {
           dirSl = 0.50 / userLev;
           dirTp = 0.75 / userLev;
+        } else if (pick.strategy === 'VWAP_PULLBACK') {
+          // OOS-validated: SOL/ETH — SL −35% margin, TP +50% margin at 20x
+          dirSl = pick.slMarginFrac ?? (0.35 / (pick.leverage || 20));
+          dirTp = pick.tpMarginFrac ?? (0.50 / (pick.leverage || 20));
         }
         const rawDirTrail = activeVer?.[dirTrailKey] != null && parseFloat(activeVer[dirTrailKey]) > 0
           ? parseFloat(activeVer[dirTrailKey]) * 100  // price fraction → capital %

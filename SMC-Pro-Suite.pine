@@ -1215,6 +1215,11 @@ plot(_cap4(obShort),     "ob_s",       color=color.new(color.red,   100), displa
 plot(_cap4(wtLong),      "wt_l",       color=color.new(color.green, 100), display=display.none)
 plot(_cap4(wtShort),     "wt_s",       color=color.new(color.red,   100), display=display.none)
 plot(trail > 0 ? 1 : trail < 0 ? -1 : 0, "trail_dir", color=color.new(color.blue, 100), display=display.none)
+// Raw structure signals — fire=1 on the exact bar the pivot is confirmed (indices 21-24)
+plot(not na(ph) and lblH == "LH" ? 1 : 0, "lh_raw", color=color.new(color.red,   100), display=display.none)
+plot(not na(pl) and lblL == "HL" ? 1 : 0, "hl_raw", color=color.new(color.green, 100), display=display.none)
+plot(not na(ph) and lblH == "HH" ? 1 : 0, "hh_raw", color=color.new(color.red,   100), display=display.none)
+plot(not na(pl) and lblL == "LL" ? 1 : 0, "ll_raw", color=color.new(color.green, 100), display=display.none)
 
 
 

@@ -1,57 +1,54 @@
 'use strict';
 
-// =============================================================
-// SMC Pro Suite Watcher — AI Learning Edition
+// MTF SMC strategy (Luxalgo convention):
+//   15m LH (lower high) → bearish bias → 1m LH or HH + next bearish candle → SHORT
+//   15m HL (higher low) → bullish bias → 1m HL or LL + next bullish candle → LONG
 //
-// Reads SMC Pro Suite indicator values via TradingView WebSocket.
-// Runs a rolling backtest on 200 bars to find the optimal probability
-// threshold, then feeds a Q-Learning agent the rich indicator state
-// so it learns WHEN to act on signals.
+// Structure labels match Luxalgo:
+//   HH = higher high (bullish continuation)
+//   LH = lower high  (bearish structure)
+//   HL = higher low  (bullish structure)
+//   LL = lower low   (bearish continuation)
 //
-// Plot index discovery: on first onUpdate, all plot values are logged
-// so you can verify sig_long/sig_short indices from Railway logs.
-// =============================================================
+// Pine plot indices (verified against SMC-Pro-Suite.pine):
+//   0-4  : VWAP bands
+//   5    : plotshape HH
+//   6    : plotshape LL
+//   7    : Smart Trail
+//   8    : sig_long   (original signal — not used)
+//   9    : sig_short  (original signal — not used)
+//   10   : prob_long
+//   11   : prob_short
+//   12-13: smc_l / smc_s
+//   14-15: liq_l / liq_s
+//   16-17: ob_l / ob_s
+//   18-19: wt_l / wt_s
+//   20   : trail_dir
+//   21   : lh_raw  ← LH pivot confirmed
+//   22   : hl_raw  ← HL pivot confirmed
+//   23   : hh_raw  ← HH pivot confirmed
+//   24   : ll_raw  ← LL pivot confirmed
 
 const TradingView = require('@mathieuc/tradingview');
 const { injectTVSignal } = require('../cycle');
 
-const bLog = (...args) => console.log('[SMC-Watcher]', ...args);
+const bLog = (...a) => console.log('[SMC-Watcher]', ...a);
 
-// ── Config ──────────────────────────────────────────────────
+// ── Config ───────────────────────────────────────────────────────
 const SYMBOLS        = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT.P'];
-const TIMEFRAMES     = ['15', '1'];  // live trading timeframes (15m + 1m)
-const BT_TIMEFRAME   = '1';         // 1m backtest
-const HISTORY_BARS   = 5000;        // ~3.5 days of 1m bars for backtest
-const COOLDOWN_MS  = 30 * 60 * 1000;  // 30 min cooldown per symbol per direction
-const SCRIPT_ID    = 'USER;5c16ebbf6afb4746a8fc0b693cc3a834';
+const HISTORY_BARS   = 500;
+const COOLDOWN_MS    = 30 * 60 * 1000;   // 30 min per symbol per direction
+const BIAS_TTL_MS    = 4 * 60 * 60 * 1000; // 15m bias expires after 4 hours
+const BIAS_LOOKBACK  = 4;                // scan last 4 × 15m bars on startup (~1 hour)
+const SCRIPT_ID      = 'USER;5c16ebbf6afb4746a8fc0b693cc3a834';
 
-// Plot index layout (Pine Script declaration order):
-// 0  VWAP
-// 1  VWAP+1
-// 2  VWAP-1
-// 3  VWAP+2
-// 4  VWAP-2
-// 5  HH  (plotshape)
-// 6  LL  (plotshape)
-// 7  Smart Trail
-// 8  sig_long       ← these are the signal plots
-// 9  sig_short
-// 10 prob_long      ← AI learning exports (added in Pine v2)
-// 11 prob_short
-// 12 smc_l
-// 13 smc_s
-// 14 liq_l
-// 15 liq_s
-// 16 ob_l
-// 17 ob_s
-// 18 wt_l
-// 19 wt_s
-// 20 trail_dir
+// Money management (backtest-optimised: 66% WR, +150% return)
+const TRADE_SIZE_PCT = 0.10;
+const SL_PCT         = 0.50;
+const TP_PCT         = 0.60;
 
-// If the indicator hasn't been re-published with AI exports yet, fall back:
+// Plot indices
 const IDX = {
-  sigLong:   8,
-  sigShort:  9,
   probLong:  10,
   probShort: 11,
   smcL:      12,
@@ -63,23 +60,26 @@ const IDX = {
   wtL:       18,
   wtS:       19,
   trailDir:  20,
+  lhRaw:     21,  // LH confirmed → SHORT signal
+  hlRaw:     22,  // HL confirmed → LONG  signal
+  hhRaw:     23,  // HH confirmed → SHORT sweep (needs next bearish candle)
+  llRaw:     24,  // LL confirmed → LONG  sweep (needs next bullish candle)
 };
 
-// ── Q-Learning ───────────────────────────────────────────────
-// State = (probBucket, smcScore, liqScore, obScore, wtScore, trailDir)
-// Actions = 0 (skip), 1 (trade)
-// Reward  = +1 win, -1 loss  (winner determined by next bar direction)
-
-const Q_TABLE = {};   // 'state' → [skipValue, tradeValue]
-const ALPHA   = 0.1;  // learning rate
-const GAMMA   = 0.9;  // discount
-let   EPSILON = 0.3;  // exploration (decays toward 0.05)
+// ── Q-Learning ───────────────────────────────────────────────────
+const Q_TABLE = {};
+const ALPHA   = 0.1;
+const GAMMA   = 0.9;
+let   EPSILON = 0.3;
 
 function stateKey(f) {
-  const prob = Math.floor(f.prob / 20) * 20;  // bucket to 20s: 0,20,40,60,80,100
-  return `${prob}|${f.smc}|${f.liq}|${f.ob}|${f.wt}|${f.trail}`;
+  return `${Math.floor(f.prob / 20) * 20}|${f.smc}|${f.liq}|${f.ob}|${f.wt}|${f.trail}`;
 }
+function qValues(k)           { if (!Q_TABLE[k]) Q_TABLE[k] = [0, 0]; return Q_TABLE[k]; }
+function qAction(k)           { const q = qValues(k); return Math.random() < EPSILON ? (Math.random() < 0.5 ? 0 : 1) : (q[1] >= q[0] ? 1 : 0); }
+function qUpdate(k, a, r)     { const q = qValues(k); q[a] += ALPHA * (r + GAMMA * Math.max(...q) - q[a]); EPSILON = Math.max(0.05, EPSILON * 0.9995); }
 
+<<<<<<< Updated upstream
 function qValues(key) {
   if (!Q_TABLE[key]) Q_TABLE[key] = [0, 0];
   return Q_TABLE[key];
@@ -156,195 +156,131 @@ const TF15M_EXPIRY_MS = 4 * 60 * 60 * 1000;  // 4h — discard stale 15m structu
 const pending = new Map();  // sym → { key, action, direction, entryPx }
 
 // ── Cooldown ────────────────────────────────────────────────
+=======
+// ── Shared state ─────────────────────────────────────────────────
+// bias[sym] = { direction:'LONG'|'SHORT', setAt:ms } | null
+const biasMap   = {};
+>>>>>>> Stashed changes
 const cooldowns = new Map();
+const qPending  = new Map();  // sym → { key, action, direction, entryPx }
 
-function canTrade(sym, direction) {
-  const last = cooldowns.get(`${sym}:${direction}`) || 0;
-  return Date.now() - last > COOLDOWN_MS;
+function canTrade(sym, dir) { return Date.now() - (cooldowns.get(`${sym}:${dir}`) || 0) > COOLDOWN_MS; }
+function markTraded(sym, dir) { cooldowns.set(`${sym}:${dir}`, Date.now()); }
+function normSym(tv)          { return tv.replace(/.*:/, '').replace(/[^A-Z]/g, '').replace('USDTP', 'USDT'); }
+function biasAlive(sym)       { const b = biasMap[sym]; return b && Date.now() - b.setAt < BIAS_TTL_MS ? b : null; }
+
+// ── Indicator loader (shared) ────────────────────────────────────
+async function loadIndicator() {
+  return TradingView.getIndicator(
+    SCRIPT_ID, 'last',
+    process.env.TV_SESSION || '', process.env.TV_SESSION_SIGN || '',
+  );
 }
 
-function markTraded(sym, direction) {
-  cooldowns.set(`${sym}:${direction}`, Date.now());
-}
-
-function normalizeSym(tvTicker) {
-  return tvTicker.replace(/.*:/, '').replace(/[^A-Z]/g, '').replace('USDTP', 'USDT');
-}
-
-// ── Per-symbol dynamic thresholds ───────────────────────────
-const dynamicThreshold = {};  // sym → { long: N, short: N }
-
-const MIN_THRESHOLD = 15;  // never trade below this regardless of backtest
-
-function getThreshold(sym, direction) {
-  const bt = dynamicThreshold[sym]?.[direction.toLowerCase()] ?? MIN_THRESHOLD;
-  return Math.max(bt, MIN_THRESHOLD);
-}
-
-// ── 1m Backtest runner ───────────────────────────────────────
-// Runs once on startup: fetches 5000 1m bars, finds every signal,
-// tests all thresholds, prints a full WR table to the logs.
-
-async function runFullBacktest(tvTicker) {
-  const sym = normalizeSym(tvTicker);
-  bLog(`[${sym}][BT] Loading 1m backtest (${HISTORY_BARS} bars)...`);
+// ── 15m watcher — reads LH/HL, sets bias ─────────────────────────
+async function watch15m(tvTicker) {
+  const sym = normSym(tvTicker);
+  bLog(`[${sym}][15m] Starting`);
 
   const client = new TradingView.Client();
-  const chart  = new client.Session.Chart();
-  chart.setMarket(tvTicker, { timeframe: BT_TIMEFRAME, range: HISTORY_BARS });
-
-  let indicator;
-  try {
-    indicator = await TradingView.getIndicator(
-      SCRIPT_ID, 'last',
-      process.env.TV_SESSION      || '',
-      process.env.TV_SESSION_SIGN || '',
-    );
-  } catch (err) {
-    bLog(`[${sym}][BT] Failed to load indicator: ${err.message}`);
+  client.onError((...e) => {
+    bLog(`[${sym}][15m] TV error — reconnect 30s: ${e.join(' ')}`);
     client.end();
-    return;
-  }
-
-  const pine = new chart.Study(indicator);
-
-  await new Promise(resolve => {
-    let settled = false;
-    const done = () => { if (!settled) { settled = true; resolve(); } };
-
-    // Wait until we have enough bars or 60s timeout
-    pine.onUpdate(() => {
-      if ((pine.periods?.length ?? 0) >= Math.min(500, HISTORY_BARS * 0.1)) done();
-    });
-    setTimeout(done, 60_000);
-  });
-
-  const periods      = pine.periods      || [];
-  const pricePeriods = chart.periods     || [];
-
-  if (periods.length < 10) {
-    bLog(`[${sym}][BT] Not enough bars (${periods.length}) — skipping`);
-    client.end();
-    return;
-  }
-
-  bLog(`[${sym}][BT] Got ${periods.length} bars on 1m`);
-
-  for (const dir of ['LONG', 'SHORT']) {
-    const sigIdx  = dir === 'LONG' ? IDX.sigLong  : IDX.sigShort;
-    const probIdx = dir === 'LONG' ? IDX.probLong : IDX.probShort;
-
-    const signals = [];
-    for (let i = 0; i < periods.length - 1; i++) {
-      const bar  = periods[i];
-      const next = pricePeriods?.[i + 1];
-      if (!bar || !next) continue;
-      if (bar[sigIdx] !== 1) continue;
-
-      const prob    = bar[probIdx] ?? 50;
-      const entryPx = next.open  ?? 0;
-      const exitPx  = next.close ?? 0;
-      const pnl     = dir === 'LONG' ? exitPx - entryPx : entryPx - exitPx;
-      signals.push({ prob, win: pnl > 0, pnl });
-    }
-
-    if (signals.length === 0) {
-      bLog(`[${sym}][BT] ${dir}: no signals found in ${periods.length} bars`);
-      continue;
-    }
-
-    // Print WR table for every threshold
-    bLog(`[${sym}][BT] ── ${dir} (${signals.length} total signals) ──`);
-    let bestLine = '';
-    let bestWR   = 0;
-    for (let t = 20; t <= 90; t += 5) {
-      const sub   = signals.filter(s => s.prob >= t);
-      if (sub.length === 0) continue;
-      const wins  = sub.filter(s => s.win).length;
-      const wr    = (wins / sub.length * 100).toFixed(1);
-      const bar   = '█'.repeat(Math.round(wins / sub.length * 10)) + '░'.repeat(10 - Math.round(wins / sub.length * 10));
-      const line  = `  thresh=${t}%  trades=${sub.length}  wins=${wins}  WR=${wr}%  ${bar}`;
-      bLog(`[${sym}][BT]${line}`);
-      if (wins / sub.length > bestWR && sub.length >= 3) {
-        bestWR   = wins / sub.length;
-        bestLine = `thresh=${t}%  WR=${wr}%  trades=${sub.length}`;
-      }
-    }
-    bLog(`[${sym}][BT] BEST ${dir}: ${bestLine}`);
-
-    // Apply best threshold to live trading
-    if (!dynamicThreshold[sym]) dynamicThreshold[sym] = { long: 40, short: 40 };
-    dynamicThreshold[sym][dir.toLowerCase()] = parseInt(bestLine.match(/thresh=(\d+)/)?.[1] ?? '40');
-  }
-
-  client.end();
-  bLog(`[${sym}][BT] Done — live thresholds: LONG=${dynamicThreshold[sym]?.long}% SHORT=${dynamicThreshold[sym]?.short}%`);
-}
-
-// ── Main watcher ─────────────────────────────────────────────
-async function watchSymbol(tvTicker, timeframe = '15') {
-  const sym = normalizeSym(tvTicker);
-  bLog(`[${sym}][${timeframe}m] Starting watcher`);
-
-  const client = new TradingView.Client();
-  client.onError((...err) => {
-    bLog(`[${sym}][${timeframe}m] TV error: ${err.join(' ')} — reconnecting in 30s`);
-    client.end();
-    setTimeout(() => watchSymbol(tvTicker, timeframe), 30_000);
+    setTimeout(() => watch15m(tvTicker), 30_000);
   });
 
   const chart = new client.Session.Chart();
-  chart.setMarket(tvTicker, { timeframe, range: HISTORY_BARS });
+  chart.setMarket(tvTicker, { timeframe: '15', range: HISTORY_BARS });
 
-  let indicator;
-  try {
-    indicator = await TradingView.getIndicator(
-      SCRIPT_ID, 'last',
-      process.env.TV_SESSION      || '',
-      process.env.TV_SESSION_SIGN || '',
-    );
-    bLog(`[${sym}][${timeframe}m] Loaded: ${indicator.description || 'SMC Pro Suite'}`);
-  } catch (err) {
-    bLog(`[${sym}][${timeframe}m] Failed to load indicator: ${err.message} — retrying in 60s`);
+  let ind;
+  try   { ind = await loadIndicator(); }
+  catch (e) {
+    bLog(`[${sym}][15m] Indicator load failed: ${e.message} — retry 60s`);
     client.end();
-    setTimeout(() => watchSymbol(tvTicker, timeframe), 60_000);
+    setTimeout(() => watch15m(tvTicker), 60_000);
     return;
   }
 
-  const pine = new chart.Study(indicator);
+  const pine        = new chart.Study(ind);
+  let   startupDone = false;
+  let   debugDumped = false;
 
-  // Discover plot indices from metadata when available
-  pine.onReady(() => {
-    const plots = pine.studyInputsInfo?.plots || pine.metaInfo?.plots || [];
-    bLog(`[${sym}] Total plots in metadata: ${plots.length}`);
-    plots.forEach((p, i) => {
-      if (p.id || p.title) bLog(`[${sym}]   plot[${i}] id="${p.id}" title="${p.title}"`);
-      // Override IDX if names are found
-      const name = p.id || p.title || '';
-      if (name === 'sig_long')  { IDX.sigLong   = i; bLog(`[${sym}] sig_long  → index ${i}`); }
-      if (name === 'sig_short') { IDX.sigShort  = i; bLog(`[${sym}] sig_short → index ${i}`); }
-      if (name === 'prob_long') { IDX.probLong  = i; }
-      if (name === 'prob_short'){ IDX.probShort = i; }
-      if (name === 'smc_l')     { IDX.smcL      = i; }
-      if (name === 'smc_s')     { IDX.smcS      = i; }
-      if (name === 'liq_l')     { IDX.liqL      = i; }
-      if (name === 'liq_s')     { IDX.liqS      = i; }
-      if (name === 'ob_l')      { IDX.obL       = i; }
-      if (name === 'ob_s')      { IDX.obS       = i; }
-      if (name === 'wt_l')      { IDX.wtL       = i; }
-      if (name === 'wt_s')      { IDX.wtS       = i; }
-      if (name === 'trail_dir') { IDX.trailDir  = i; }
-    });
+  pine.onUpdate(() => {
+    try {
+      const periods = pine.periods;
+      if (!periods || periods.length < 2) return;
+      const n      = periods.length;
+      const latest = periods[n - 1];
+
+      // Dump plot values once to verify indices
+      if (!debugDumped) {
+        debugDumped = true;
+        const vals = Array.from({ length: 27 }, (_, i) => `[${i}]=${latest[i]}`);
+        bLog(`[${sym}][15m] PLOT DUMP: ${vals.join(' ')}`);
+      }
+
+      // Startup: scan last BIAS_LOOKBACK bars for a recent LH/HL we missed
+      if (!startupDone && n >= BIAS_LOOKBACK + 1) {
+        startupDone = true;
+        for (let i = n - 2; i >= Math.max(0, n - 1 - BIAS_LOOKBACK); i--) {
+          const b = periods[i];
+          if (!b) continue;
+          if (b[IDX.lhRaw] === 1) {
+            biasMap[sym] = { direction: 'SHORT', setAt: Date.now() };
+            bLog(`[${sym}][15m] STARTUP recovered LH → bias=SHORT`);
+            break;
+          }
+          if (b[IDX.hlRaw] === 1) {
+            biasMap[sym] = { direction: 'LONG', setAt: Date.now() };
+            bLog(`[${sym}][15m] STARTUP recovered HL → bias=LONG`);
+            break;
+          }
+        }
+        if (!biasMap[sym]) bLog(`[${sym}][15m] STARTUP: no recent LH/HL in last ${BIAS_LOOKBACK} bars`);
+      }
+
+      // Live: set bias on each new LH/HL
+      const lh = latest[IDX.lhRaw] === 1;
+      const hl = latest[IDX.hlRaw] === 1;
+      if (!lh && !hl) return;
+
+      const dir = lh ? 'SHORT' : 'LONG';
+      biasMap[sym] = { direction: dir, setAt: Date.now() };
+      bLog(`[${sym}][15m] ${lh ? 'LH' : 'HL'} confirmed → bias=${dir}`);
+    } catch (e) {
+      bLog(`[${sym}][15m] error: ${e.message}`);
+    }
+  });
+}
+
+// ── 1m watcher — confirms entry when bias matches ────────────────
+async function watch1m(tvTicker) {
+  const sym = normSym(tvTicker);
+  bLog(`[${sym}][1m] Starting`);
+
+  const client = new TradingView.Client();
+  client.onError((...e) => {
+    bLog(`[${sym}][1m] TV error — reconnect 30s: ${e.join(' ')}`);
+    client.end();
+    setTimeout(() => watch1m(tvTicker), 30_000);
   });
 
-  let backtestDone   = false;
-  let debugDumped    = false;
+  const chart = new client.Session.Chart();
+  chart.setMarket(tvTicker, { timeframe: '1', range: 500 });
 
-  // Pivot tracking for LH/HL detection
-  let lastPivotHigh   = null;  // { price, barIdx }
-  let lastPivotLow    = null;  // { price, barIdx }
-  let pendingEntry    = null;  // { direction, setOnBarIdx, features } — fires on next confirming candle
-  const PIVOT_LEN     = 3;    // bars each side for pivot detection
+  let ind;
+  try   { ind = await loadIndicator(); }
+  catch (e) {
+    bLog(`[${sym}][1m] Indicator load failed: ${e.message} — retry 60s`);
+    client.end();
+    setTimeout(() => watch1m(tvTicker), 60_000);
+    return;
+  }
+
+  const pine = new chart.Study(ind);
+  let pending     = null;  // { direction, trigger, setOnBar } — HH/LL sweep waiting for next candle
+  let debugDumped = false;
+  let barCount    = 0;
 
   pine.onUpdate(() => {
     try {
@@ -352,28 +288,32 @@ async function watchSymbol(tvTicker, timeframe = '15') {
       const pricePeriods = chart.periods;
       if (!periods || periods.length < 2) return;
 
+      barCount = pricePeriods?.length ?? 0;
       const latest      = periods[periods.length - 1];
-      const priceLatest = pricePeriods?.[pricePeriods.length - 1];
-      const n           = pricePeriods?.length ?? 0;
+      const priceLatest = pricePeriods?.[barCount - 1];
 
-      // Dump plot indices once on first update
-      if (!debugDumped && latest) {
+      if (!debugDumped) {
         debugDumped = true;
-        const vals = [];
-        for (let i = 0; i < 25; i++) vals.push(`[${i}]=${latest[i]}`);
-        bLog(`[${sym}][${timeframe}m] PLOT DUMP: ${vals.join(' ')}`);
+        const vals = Array.from({ length: 27 }, (_, i) => `[${i}]=${latest[i]}`);
+        bLog(`[${sym}][1m] PLOT DUMP: ${vals.join(' ')}`);
       }
 
-      // Q-Learning reward from previous trade (1 bar later)
-      const pend = pending.get(sym + timeframe);
-      if (pend && priceLatest) {
-        const curPx = priceLatest.close ?? 0;
-        if (pend.entryPx > 0 && curPx > 0) {
-          const pnl    = pend.direction === 'LONG' ? curPx - pend.entryPx : pend.entryPx - curPx;
-          const reward = pnl > 0 ? 1 : -1;
-          qUpdate(pend.key, pend.action, reward);
-          bLog(`[${sym}][${timeframe}m] Q-update: dir=${pend.direction} reward=${reward}`);
+      // ── Resolve pending HH/LL sweep — needs next bearish/bullish candle ──
+      if (pending && barCount > pending.setOnBar) {
+        const isBull = priceLatest?.close > priceLatest?.open;
+        const isBear = priceLatest?.close < priceLatest?.open;
+        const ok     = (pending.direction === 'SHORT' && isBear)
+                    || (pending.direction === 'LONG'  && isBull);
+
+        if (barCount > pending.setOnBar + 3) {
+          bLog(`[${sym}][1m] ${pending.direction} ${pending.trigger} sweep expired`);
+          pending = null;
+        } else if (ok) {
+          const { direction, trigger } = pending;
+          pending = null;
+          executeTrade(direction, trigger, latest, priceLatest);
         }
+<<<<<<< Updated upstream
         pending.delete(sym + timeframe);
       }
 
@@ -470,21 +410,44 @@ async function watchSymbol(tvTicker, timeframe = '15') {
       if (n > pendingEntry.setOnBarIdx + 3) {
         bLog(`[${sym}][${timeframe}m] ${pendingEntry.direction} entry expired (no confirmation)`);
         pendingEntry = null;
+=======
+>>>>>>> Stashed changes
         return;
       }
 
-      if (!confirmed) return;
+      // ── Check 15m bias ────────────────────────────────────────────
+      const b = biasAlive(sym);
+      if (!b) return;
 
-      const direction = pendingEntry.direction;
-      const features  = pendingEntry.features;
-      pendingEntry = null;
+      const lh = latest[IDX.lhRaw] === 1;
+      const hl = latest[IDX.hlRaw] === 1;
+      const hh = latest[IDX.hhRaw] === 1;
+      const ll = latest[IDX.llRaw] === 1;
 
+<<<<<<< Updated upstream
       if (!canTrade(sym, direction)) return;
 
       bLog(`[${sym}][1m] *** TRADING ${direction} price=${price} — 15m+1m SMC structure confirmed ***`);
+=======
+      // All patterns arm a pending entry — fire on the NEXT confirming candle
+      if (b.direction === 'SHORT' && (lh || hh)) {
+        const trigger = lh ? 'LH' : 'HH';
+        bLog(`[${sym}][1m] ${trigger} detected (bias=SHORT) — waiting next bearish candle`);
+        pending = { direction: 'SHORT', trigger, setOnBar: barCount };
+      } else if (b.direction === 'LONG' && (hl || ll)) {
+        const trigger = hl ? 'HL' : 'LL';
+        bLog(`[${sym}][1m] ${trigger} detected (bias=LONG) — waiting next bullish candle`);
+        pending = { direction: 'LONG', trigger, setOnBar: barCount };
+      }
+>>>>>>> Stashed changes
 
-      markTraded(sym, direction);
+      function executeTrade(direction, trigger, bar, priceBar) {
+        if (!canTrade(sym, direction)) {
+          bLog(`[${sym}][1m] ${direction} (${trigger}) — cooldown, skip`);
+          return;
+        }
 
+<<<<<<< Updated upstream
       // Q-Learning reward bookkeeping (still records outcome for future learning)
       const key = stateKey(features);
       pending.set(sym + timeframe, { key, action: 1, direction, entryPx: price });
@@ -516,34 +479,82 @@ async function watchSymbol(tvTicker, timeframe = '15') {
           qEpsilon: parseFloat(EPSILON.toFixed(4)),
         },
       });
+=======
+        const price = priceBar?.close ?? 0;
+        if (price <= 0) return;
 
-    } catch (err) {
-      bLog(`[${sym}][${timeframe}m] onUpdate error: ${err.message}`);
+        const isLong = direction === 'LONG';
+        const prob   = bar[isLong ? IDX.probLong  : IDX.probShort]  ?? 50;
+        const smc    = Math.round(bar[isLong ? IDX.smcL   : IDX.smcS]   ?? 0);
+        const liq    = Math.round(bar[isLong ? IDX.liqL   : IDX.liqS]   ?? 0);
+        const ob     = Math.round(bar[isLong ? IDX.obL    : IDX.obS]    ?? 0);
+        const wt     = Math.round(bar[isLong ? IDX.wtL    : IDX.wtS]    ?? 0);
+        const trail  = Math.round(bar[IDX.trailDir] ?? 0);
+        const feats  = { prob, smc, liq, ob, wt, trail: isLong ? trail : -trail };
+
+        // Q-Learning reward for previous trade
+        const qp = qPending.get(sym);
+        if (qp && qp.entryPx > 0) {
+          const pnl = qp.direction === 'LONG' ? price - qp.entryPx : qp.entryPx - price;
+          qUpdate(qp.key, qp.action, pnl > 0 ? 1 : -1);
+          bLog(`[${sym}][1m] Q-reward: ${qp.direction} ${pnl > 0 ? 'WIN' : 'LOSS'}`);
+          qPending.delete(sym);
+        }
+>>>>>>> Stashed changes
+
+        const key    = stateKey(feats);
+        const action = qAction(key);
+        if (action === 0) {
+          bLog(`[${sym}][1m] Q-Learning SKIP (ε=${EPSILON.toFixed(3)})`);
+          return;
+        }
+
+        markTraded(sym, direction);
+        qPending.set(sym, { key, action, direction, entryPx: price });
+
+        bLog(`[${sym}][1m] *** TRADE ${direction} | trigger=${trigger} | price=${price} | prob=${prob}% | bias=${biasMap[sym]?.direction} ***`);
+
+        injectTVSignal({
+          symbol:             sym,
+          side:               isLong ? 'BUY' : 'SELL',
+          direction,
+          price,
+          zone:               'SMC_PRO',
+          pivot:              trigger,
+          setup:              'SMC_PRO_SUITE',
+          setupName:          `${trigger} (1m entry, 15m bias)`,
+          score:              prob,
+          signalType:         `SMC-MTF-${direction}`,
+          source:             'smc-suite-watcher',
+          timeframe:          '1',
+          isMomentumBreakout: true,
+          override:           true,
+          receivedAt:         Date.now(),
+          tradeSizePct:       TRADE_SIZE_PCT,
+          slPct:              SL_PCT,
+          tpPct:              TP_PCT,
+          aiFeatures: { prob, smc, liq, ob, wt, trail, qEpsilon: parseFloat(EPSILON.toFixed(4)) },
+        });
+      }
+
+    } catch (e) {
+      bLog(`[${sym}][1m] error: ${e.message}`);
     }
   });
 }
 
+// ── Start ─────────────────────────────────────────────────────────
 async function start() {
-  bLog('Starting — watching BTCUSDT, ETHUSDT, SOLUSDT via TradingView WebSocket');
-  bLog(`Initial IDX map: sigLong=${IDX.sigLong} sigShort=${IDX.sigShort} probLong=${IDX.probLong} probShort=${IDX.probShort}`);
-
-  // Run 1m backtests first (in parallel across all symbols)
-  bLog('Running 1m backtests before going live...');
-  await Promise.allSettled(SYMBOLS.map(sym => runFullBacktest(sym)));
-  bLog('Backtests complete — starting live watchers');
+  bLog('Starting MTF watcher (15m bias → 1m entry)');
+  bLog(`Plot indices: lhRaw=${IDX.lhRaw} hlRaw=${IDX.hlRaw} hhRaw=${IDX.hhRaw} llRaw=${IDX.llRaw}`);
 
   for (const sym of SYMBOLS) {
-    for (const tf of TIMEFRAMES) {
-      watchSymbol(sym, tf).catch(err =>
-        bLog(`Fatal error for ${sym}[${tf}m]: ${err.message}`)
-      );
-      await new Promise(r => setTimeout(r, 2000));
-    }
+    watch15m(sym).catch(e => bLog(`[15m fatal] ${sym}: ${e.message}`));
+    await new Promise(r => setTimeout(r, 2000));
+    watch1m(sym).catch(e => bLog(`[1m fatal] ${sym}: ${e.message}`));
+    await new Promise(r => setTimeout(r, 2000));
   }
 }
 
-if (require.main === module) {
-  start().catch(console.error);
-}
-
+if (require.main === module) start().catch(console.error);
 module.exports = { start };

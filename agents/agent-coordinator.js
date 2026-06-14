@@ -28,6 +28,7 @@ const { PolyBTCAgent }    = require('./poly-btc-agent');
 const { SMCPatternAgent } = require('./smc-pattern-agent');
 const { MarketDecisionAgent } = require('./market-decision-agent');
 const { SmartVisionAgent } = require('./smart-vision-agent');
+const { VwapPullbackAgent } = require('./vwap-pullback-agent');
 const { getAIChartLearner } = require('./ai-chart-learner');
 const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
@@ -68,6 +69,7 @@ class AgentCoordinator extends BaseAgent {
     this.marketDecisionAgent = new MarketDecisionAgent(options);
     this.aiChartLearner   = getAIChartLearner(options);
     this.smartVisionAgent = new SmartVisionAgent({ ...options, coordinator: this });
+    this.vwapPullbackAgent = new VwapPullbackAgent(options);
 
     // Agent registry — order matters for display
     this._agents = new Map();
@@ -87,6 +89,7 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('market-decision', this.marketDecisionAgent);
     this._agents.set('ai-learner',   this.aiChartLearner);
     this._agents.set('smart-vision', this.smartVisionAgent);
+    this._agents.set('vwap-pullback', this.vwapPullbackAgent);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
@@ -141,6 +144,18 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async init() {
+    // Guard against double initialization. Both server.js and bot.js call
+    // getCoordinator().init() on the same singleton instance; without this
+    // guard the entire agent framework (and its trading loops) boots twice.
+    if (this._initPromise) {
+      this.log('[BOOT] init() already in progress/done — skipping duplicate call');
+      return this._initPromise;
+    }
+    this._initPromise = this._doInit();
+    return this._initPromise;
+  }
+
+  async _doInit() {
     this.log('[BOOT] Starting Agent framework initialization...');
 
     try {
@@ -471,6 +486,16 @@ class AgentCoordinator extends BaseAgent {
     // this.smcPatternAgent.execute({ coordinator: this }).catch(() => {});
 
     // 6d. PolyBTC Agent — DISABLED (Polymarket trading removed)
+
+    // 6e. VWAP Pullback Agent — SOL & ETH, 20x, VWAP ±2SD outer-band filter + 1m swing entry
+    // OOS-validated (30d): SOL 20x/$35 ✅, SOL 20x/$50 ✅, ETH 50x/$35 ✅
+    // Runs every micro-cycle (every ~30s); agent self-throttles via 4h per-symbol cooldown
+    // and one-trade-per-bias-window guard. Safe to call frequently.
+    if (!this.vwapPullbackAgent.paused) {
+      this.vwapPullbackAgent.execute({ coordinator: this }).catch(err => {
+        this.addActivity('error', `VwapPullbackAgent error: ${err.message}`);
+      });
+    }
 
     // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
     if (this._microCycleCount % 60 === 0) {
