@@ -2111,13 +2111,14 @@ async function executeForAllUsers(pick) {
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
         const patternText = `${pick.pattern15 || ''} ${pick.setupName || ''} ${pick.smcContext?.pattern || ''}`;
+        // Professional mode allows only the live backtested strategy:
+        //   SMC_PRO_SUITE — the 15m-bias → 1m-entry structure strategy with the
+        //   VWAP ±2SD filter (backtest-structure.js), traded on BTC/ETH/SOL.
+        // The legacy BTC/ETH LL→LH / HH→HL pattern rule it replaced was removed.
+        const SMC_PRO_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']);
         const isProfessionalBacktestSetup =
-          pick.strategy === 'VWAP_PULLBACK' ||   // ← VWAP pullback always allowed (OOS-validated)
-          ((symbol === 'BTCUSDT' || symbol === 'ETHUSDT') &&
-          (
-            (!isLong && patternText.includes('LL') && patternText.includes('LH')) ||
-            ( isLong && patternText.includes('HH') && patternText.includes('HL'))
-          ));
+          (pick.setup === 'SMC_PRO_SUITE' && SMC_PRO_SYMBOLS.has(symbol)) ||
+          pick.strategy === 'VWAP_PULLBACK';   // OOS-validated pullback agent (SOL/ETH)
         if (PROFESSIONAL_STRATEGY_ONLY && !isProfessionalBacktestSetup) {
           userLog.trade(
             `User ${key.email}: blocked by professional mode — only BTC/ETH SHORT 15m LL->LH is allowed ` +

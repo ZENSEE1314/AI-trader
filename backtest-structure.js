@@ -408,6 +408,9 @@ async function main() {
 
 main.runOne = runOne;
 main.fetchKlines = fetchKlines;
+main.computeVwapBands = computeVwapBands;
+main.applyVwapFilter = applyVwapFilter;
+main.TF_MS = TF_MS;
 module.exports = main;
 
 if (require.main === module) {
