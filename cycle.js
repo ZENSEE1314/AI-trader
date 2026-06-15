@@ -3131,8 +3131,10 @@ async function syncTradeStatus() {
               bLog.trade(`Binance trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(pricePctDebug*100).toFixed(3)}% capitalPct=${(capitalPctDebug*100).toFixed(2)}% lev=${tradeLev}x currentSL=$${currentSlBin.toFixed(binSlPrec)}`);
 
               // ── SMC TP1-hit (Binance): close 50%, lock SL at TP1, ride runner to TP2 ──
-              const bnSmcTp1 = parseFloat(trade.tp_price)  || 0;
-              const bnSmcTp2 = parseFloat(trade.tp2_price) || 0;
+              // EXPO_BASELINE has no stored tp_price — derive TP1 (+35%) / runner (+500%) from entry.
+              const isExpoBn = trade.setup === 'EXPO_BASELINE';
+              const bnSmcTp1 = isExpoBn ? (isLong ? entryPrice * (1 + 0.35 / tradeLev) : entryPrice * (1 - 0.35 / tradeLev)) : (parseFloat(trade.tp_price)  || 0);
+              const bnSmcTp2 = isExpoBn ? (isLong ? entryPrice * (1 + 5.00 / tradeLev) : entryPrice * (1 - 5.00 / tradeLev)) : (parseFloat(trade.tp2_price) || 0);
               const bnTp1Hit = trade.smc_tp1_hit === true || trade.smc_tp1_hit === 't';
 
               if (bnSmcTp1 > 0 && bnSmcTp2 > 0 && !bnTp1Hit) {
@@ -3244,6 +3246,8 @@ async function syncTradeStatus() {
                 if (slUpdated) {
                   const tierRes = binSlSource === 'tier'
                     ? calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, 0, false)
+                    : binSlSource === 'expo'
+                    ? calculateExpoTrail(entryPrice, curPrice, isLong, lastStep, tradeLev)
                     : null;
                   await db.query(
                     `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
@@ -3456,9 +3460,12 @@ async function syncTradeStatus() {
               // Capital-% based so the trigger scales correctly with leverage.
               // At 125x: TP1 = +0.48% price (+60% cap), TP2 = +0.80% price (+100% cap).
               // At  75x: TP1 = +0.80% price (+60% cap), TP2 = +1.33% price (+100% cap).
-              const TP1_CAPITAL = 0.60; // +60% capital
+              // EXPO_BASELINE: close 50% at TP1 +35%, lock SL at +35% (then calculateExpoTrail
+              // rides the runner +15/+10). Other setups keep the +60% scale-out.
+              const isExpoTp1   = trade.setup === 'EXPO_BASELINE';
+              const TP1_CAPITAL = isExpoTp1 ? 0.35 : 0.60;
               const TP2_CAPITAL = 1.00; // +100% capital
-              const SL_AT_TP1   = 0.45; // lock SL at +45% capital after TP1 hit
+              const SL_AT_TP1   = isExpoTp1 ? 0.35 : 0.45;
 
               const tp1AlreadyHit = trade.smc_tp1_hit === true || trade.smc_tp1_hit === 't';
 
