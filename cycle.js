@@ -2117,8 +2117,8 @@ async function executeForAllUsers(pick) {
         // The legacy BTC/ETH LL→LH / HH→HL pattern rule it replaced was removed.
         const SMC_PRO_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']);
         const isProfessionalBacktestSetup =
-          (pick.setup === 'SMC_PRO_SUITE' && SMC_PRO_SYMBOLS.has(symbol)) ||
-          pick.strategy === 'VWAP_PULLBACK';   // OOS-validated pullback agent (SOL/ETH)
+          (pick.setup === 'SMC_PRO_SUITE' && SMC_PRO_SYMBOLS.has(symbol));
+          // VWAP_PULLBACK retired — its agent is disabled (agent-coordinator.js 6e).
         if (PROFESSIONAL_STRATEGY_ONLY && !isProfessionalBacktestSetup) {
           userLog.trade(
             `User ${key.email}: blocked by professional mode — only BTC/ETH SHORT 15m LL->LH is allowed ` +

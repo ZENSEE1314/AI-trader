@@ -487,15 +487,17 @@ class AgentCoordinator extends BaseAgent {
 
     // 6d. PolyBTC Agent — DISABLED (Polymarket trading removed)
 
-    // 6e. VWAP Pullback Agent — SOL & ETH, 20x, VWAP ±2SD outer-band filter + 1m swing entry
-    // OOS-validated (30d): SOL 20x/$35 ✅, SOL 20x/$50 ✅, ETH 50x/$35 ✅
-    // Runs every micro-cycle (every ~30s); agent self-throttles via 4h per-symbol cooldown
-    // and one-trade-per-bias-window guard. Safe to call frequently.
-    if (!this.vwapPullbackAgent.paused) {
-      this.vwapPullbackAgent.execute({ coordinator: this }).catch(err => {
-        this.addActivity('error', `VwapPullbackAgent error: ${err.message}`);
-      });
-    }
+    // 6e. VWAP Pullback Agent — DISABLED.
+    // Retired so the SMC 15m-LH/HL structure watcher (smc-suite-watcher.js) is the
+    // sole live signal source. This agent computed its OWN 15m LH/HL natively from
+    // Bybit klines, independent of the chart indicator, so it opened trades (e.g. an
+    // ETH short) with no LH on the indicator — confusing and off-strategy.
+    // To re-enable: restore the execute() call below.
+    // if (!this.vwapPullbackAgent.paused) {
+    //   this.vwapPullbackAgent.execute({ coordinator: this }).catch(err => {
+    //     this.addActivity('error', `VwapPullbackAgent error: ${err.message}`);
+    //   });
+    // }
 
     // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
     if (this._microCycleCount % 60 === 0) {
