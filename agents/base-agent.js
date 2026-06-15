@@ -244,29 +244,13 @@ class BaseAgent {
 
   // ── Logging ───────────────────────────────────────────────
 
-  log(msg) {
-    const formatted = `[${this.name}] ${msg}`;
-    console.log(`[${this._ts()}] ${formatted}`);
-    bLog.system(formatted);
-  }
-
-  logTrade(msg) {
-    const formatted = `[${this.name}] ${msg}`;
-    console.log(`[${this._ts()}] ${formatted}`);
-    bLog.trade(formatted);
-  }
-
-  logScan(msg) {
-    const formatted = `[${this.name}] ${msg}`;
-    console.log(`[${this._ts()}] ${formatted}`);
-    bLog.scan(formatted);
-  }
-
-  logError(msg) {
-    const formatted = `[${this.name}] ${msg}`;
-    console.error(`[${this._ts()}] ERROR ${formatted}`);
-    bLog.error(formatted);
-  }
+  // NOTE: bLog.* already prints to stdout (with timestamp + category tag) AND
+  // persists to the dashboard/DB — so we do NOT also raw console.log (that was
+  // the double-logging: every agent line appeared twice, once as [SYSTEM]).
+  log(msg)      { bLog.system(`[${this.name}] ${msg}`); }
+  logTrade(msg) { bLog.trade(`[${this.name}] ${msg}`); }
+  logScan(msg)  { bLog.scan(`[${this.name}] ${msg}`); }
+  logError(msg) { bLog.error(`[${this.name}] ${msg}`); }
 
   // ── Activity Feed ──────────────────────────────────────────
 

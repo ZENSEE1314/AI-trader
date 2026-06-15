@@ -178,8 +178,10 @@ class AgentCoordinator extends BaseAgent {
         agent._coordinator = this;
       }
 
-      // Boot all system agents in parallel for fast startup
+      // Boot only the kept agents. Paused ones are skipped entirely — no init/RPG
+      // logs, no self-ticking timers (these start in init()). Keeps the logs clean.
       const initPromises = [...this._agents.entries()].map(async ([name, agent]) => {
+        if (agent.paused) return;
         try {
           await Promise.all([
             agent.init(),
