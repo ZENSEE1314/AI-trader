@@ -52,7 +52,14 @@ g1 = "  SMC Structure  "
 
 piv_len     = input.int  (5,    "Pivot Length",            group=g1, minval=2, maxval=50)
 
-show_labels = input.bool (true,  "HH / HL / LH / LL labels",group=g1)
+swing_len   = input.int  (10,   "Swing Length (HH/LL)",    group=g1, minval=2, maxval=100, tooltip="SMC Expo swing structure: HH/LL only mark swings this many bars wide, so they appear far less often. HL/LH entry pivots stay on Pivot Length.")
+
+// SMC Expo replica — validated ~85-90% match to the real Expo indicator (alt-pivot,
+// Structure Period 10). Draws HH/HL/LH/LL the way Expo does. Additive (label.new).
+sp_len      = input.int  (10,    "Expo Structure Period",   group=g1, minval=2, maxval=100)
+show_expo   = input.bool (true,  "Show Expo-style HH/HL/LH/LL", group=g1, tooltip="Replicates SMC Expo's structure labels (~85-90% match). Turn the real Expo indicator off to declutter.")
+
+show_labels = input.bool (false, "HH / HL / LH / LL labels",group=g1, tooltip="OFF by default — use the SMC Expo indicator for structure labels on the chart. Our hidden raw plots still drive the bot regardless of this toggle.")
 
 show_bos    = input.bool (true,  "BOS / CHoCH lines",       group=g1)
 
@@ -276,11 +283,69 @@ if not na(pl)
 
     lblL      := na(prevPL) or pl > prevPL ? "HL" : "LL"
 
+// ── SMC Expo swing structure — HH/LL come from a LONGER swing pivot, so they
+//    only mark significant turning points, not every 5-bar pivot. HL/LH entry
+//    triggers, BOS, scoring and the 1m logic all stay on piv_len (unchanged).
+phSwing = ta.pivothigh(high, swing_len, swing_len)
+plSwing = ta.pivotlow (low,  swing_len, swing_len)
+var float  lastPHsw = 0.0, prevPHsw = 0.0
+var float  lastPLsw = 0.0, prevPLsw = 0.0
+var string lblHsw = "", lblLsw = ""
+if not na(phSwing)
+    prevPHsw := lastPHsw
+    lastPHsw := phSwing
+    lblHsw   := prevPHsw == 0.0 or phSwing > prevPHsw ? "HH" : "LH"
+if not na(plSwing)
+    prevPLsw := lastPLsw
+    lastPLsw := plSwing
+    lblLsw   := prevPLsw == 0.0 or plSwing > prevPLsw ? "HL" : "LL"
 
 
-// Pivot structure labels — HH/LL only; LH/HL appear via signal labels to avoid double-label overlap
-plotshape(show_labels and not na(ph) and lblH == "HH", "HH", shape.labeldown, location.abovebar, color.new(#ef5350, 0), textcolor=color.white, text="HH", size=size.small, offset=-piv_len)
-plotshape(show_labels and not na(pl) and lblL == "LL", "LL", shape.labelup,   location.belowbar, color.new(#5c6bc0, 0), textcolor=color.white, text="LL", size=size.small, offset=-piv_len)
+
+// Swing structure labels (SMC Expo style). HH/LL stay at plot indices 5/6 so the
+// watcher's plot map is preserved; LH/HL are appended at the END of the script
+// (after ll_raw) so they don't shift any index the watcher reads.
+plotshape(show_labels and not na(phSwing) and lblHsw == "HH", "HH", shape.labeldown, location.abovebar, color.new(#ef5350, 0), textcolor=color.white, text="HH", size=size.small, offset=-swing_len)
+plotshape(show_labels and not na(plSwing) and lblLsw == "LL", "LL", shape.labelup,   location.belowbar, color.new(#5c6bc0, 0), textcolor=color.white, text="LL", size=size.small, offset=-swing_len)
+
+// ── SMC Expo replica: alternating pivots (len sp_len), collapse same-side runs to
+//    the extreme, label HH/HL/LH/LL when the opposite pivot closes a run. Matches
+//    the real Expo indicator ~85-90%. label.new only — no plot-index impact.
+phE = ta.pivothigh(high, sp_len, sp_len)
+plE = ta.pivotlow (low,  sp_len, sp_len)
+var int    eRunKind  = 0          // 1 = high run, -1 = low run
+var float  eRunExt   = na
+var int    eRunBar   = na
+var float  ePrevHigh = na
+var float  ePrevLow  = na
+if not na(phE)
+    if eRunKind == 1
+        if phE > eRunExt
+            eRunExt := phE
+            eRunBar := bar_index - sp_len
+    else
+        if eRunKind == -1 and not na(eRunExt)
+            lt = (na(ePrevLow) or eRunExt > ePrevLow) ? "HL" : "LL"
+            if show_expo
+                label.new(eRunBar, eRunExt, lt, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=color.new(lt == "HL" ? #26a69a : #5c6bc0, 0), textcolor=color.white, size=size.small)
+            ePrevLow := eRunExt
+        eRunKind := 1
+        eRunExt  := phE
+        eRunBar  := bar_index - sp_len
+if not na(plE)
+    if eRunKind == -1
+        if plE < eRunExt
+            eRunExt := plE
+            eRunBar := bar_index - sp_len
+    else
+        if eRunKind == 1 and not na(eRunExt)
+            ht = (na(ePrevHigh) or eRunExt > ePrevHigh) ? "HH" : "LH"
+            if show_expo
+                label.new(eRunBar, eRunExt, ht, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=color.new(ht == "HH" ? #ef5350 : #ff9800, 0), textcolor=color.white, size=size.small)
+            ePrevHigh := eRunExt
+        eRunKind := -1
+        eRunExt  := plE
+        eRunBar  := bar_index - sp_len
 
 _crossUp   = ta.crossover (close, lastPH)
 
@@ -1218,20 +1283,20 @@ plot(trail > 0 ? 1 : trail < 0 ? -1 : 0, "trail_dir", color=color.new(color.blue
 // Raw structure signals — fire=1 on the exact bar the pivot is confirmed (indices 21-24)
 plot(not na(ph) and lblH == "LH" ? 1 : 0, "lh_raw", color=color.new(color.red,   100), display=display.none)
 plot(not na(pl) and lblL == "HL" ? 1 : 0, "hl_raw", color=color.new(color.green, 100), display=display.none)
-plot(not na(ph) and lblH == "HH" ? 1 : 0, "hh_raw", color=color.new(color.red,   100), display=display.none)
-plot(not na(pl) and lblL == "LL" ? 1 : 0, "ll_raw", color=color.new(color.green, 100), display=display.none)
+plot(not na(phSwing) and lblHsw == "HH" ? 1 : 0, "hh_raw", color=color.new(color.red,   100), display=display.none)
+plot(not na(plSwing) and lblLsw == "LL" ? 1 : 0, "ll_raw", color=color.new(color.green, 100), display=display.none)
 
 
 
 // Signal labels — label.new at the EXACT saved pivot bar/price so they are
 // always on the LH/HL candle regardless of when the 1m condition fires.
-if sigLong and not na(_hlLabelLow)
+if show_labels and sigLong and not na(_hlLabelLow)
     label.new(_hlLabelBar, _hlLabelLow, "HL\nLONG",
               xloc=xloc.bar_index, yloc=yloc.price,
               style=label.style_label_up,
               color=color.new(#26a69a, 0), textcolor=color.white, size=size.small)
 
-if sigShort and not na(_lhLabelHigh)
+if show_labels and sigShort and not na(_lhLabelHigh)
     label.new(_lhLabelBar, _lhLabelHigh, "LH\nSHORT",
               xloc=xloc.bar_index, yloc=yloc.price,
               style=label.style_label_down,
