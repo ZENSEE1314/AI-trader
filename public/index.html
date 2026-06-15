@@ -231,6 +231,67 @@
 
       <div class="landing-section-divider"></div>
 
+      <!-- ── Live Backtest (public) ── -->
+      <section class="landing-section bt-section" id="live-backtest">
+        <style>
+          .bt-wrap{max-width:920px;margin:0 auto;padding:0 16px}
+          .bt-head{text-align:center;margin-bottom:24px}
+          .bt-head h2{font-size:clamp(1.6rem,4vw,2.4rem);margin:0 0 8px}
+          .bt-head p{opacity:.7;margin:0;font-size:.95rem}
+          .bt-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:20px;backdrop-filter:blur(8px)}
+          .bt-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:14px;align-items:end}
+          .bt-field label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;opacity:.65;margin-bottom:6px}
+          .bt-field input{width:100%;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.12);border-radius:10px;color:#fff;padding:10px 12px;font-size:1rem}
+          .bt-field input:focus{outline:2px solid #5b8cff;outline-offset:1px}
+          .bt-tokens{display:flex;flex-wrap:wrap;gap:8px}
+          .bt-tok{display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:7px 12px;cursor:pointer;font-size:.85rem;user-select:none}
+          .bt-tok input{accent-color:#5b8cff;width:16px;height:16px}
+          .bt-run{margin-top:16px;width:100%}
+          .bt-results{margin-top:20px}
+          .bt-agg{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:12px;margin-bottom:16px}
+          .bt-stat{background:rgba(91,140,255,.08);border:1px solid rgba(91,140,255,.2);border-radius:12px;padding:12px;text-align:center}
+          .bt-stat .v{font-size:1.5rem;font-weight:700;line-height:1.1}
+          .bt-stat .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;opacity:.6;margin-top:4px}
+          .bt-table{width:100%;border-collapse:collapse;font-size:.85rem}
+          .bt-table th,.bt-table td{padding:9px 8px;text-align:right;border-bottom:1px solid rgba(255,255,255,.07)}
+          .bt-table th:first-child,.bt-table td:first-child{text-align:left}
+          .bt-table th{opacity:.55;font-weight:600;font-size:.7rem;text-transform:uppercase}
+          .bt-pos{color:#39d98a}.bt-neg{color:#ff6b6b}
+          .bt-note{font-size:.72rem;opacity:.5;margin-top:14px;line-height:1.5}
+          .bt-msg{text-align:center;opacity:.7;padding:14px}
+          @media(max-width:560px){.bt-grid{grid-template-columns:1fr 1fr}}
+        </style>
+        <div class="bt-wrap">
+          <div class="bt-head">
+            <h2>Try Our Strategy — Live Backtest</h2>
+            <p>Run our live SMC&nbsp;Expo bot on real recent data. Pick tokens and risk, see the edge.</p>
+          </div>
+          <div class="bt-card">
+            <form id="bt-form" aria-label="Live backtest settings">
+              <div class="bt-field" style="margin-bottom:14px">
+                <label id="bt-tokens-label">Tokens</label>
+                <div class="bt-tokens" role="group" aria-labelledby="bt-tokens-label">
+                  <label class="bt-tok"><input type="checkbox" name="tok" value="BTCUSDT" checked> BTC</label>
+                  <label class="bt-tok"><input type="checkbox" name="tok" value="ETHUSDT" checked> ETH</label>
+                  <label class="bt-tok"><input type="checkbox" name="tok" value="SOLUSDT" checked> SOL</label>
+                  <label class="bt-tok"><input type="checkbox" name="tok" value="BNBUSDT"> BNB</label>
+                </div>
+              </div>
+              <div class="bt-grid">
+                <div class="bt-field"><label for="bt-lev">Leverage (x)</label><input id="bt-lev" name="lev" type="number" min="1" max="125" value="20" inputmode="numeric"></div>
+                <div class="bt-field"><label for="bt-sl">Stop-Loss (% margin)</label><input id="bt-sl" name="sl" type="number" min="5" max="200" value="50" inputmode="numeric"></div>
+                <div class="bt-field"><label for="bt-tp">Take-Profit (% margin)</label><input id="bt-tp" name="tp" type="number" min="5" max="200" value="35" inputmode="numeric"></div>
+                <div class="bt-field"><label for="bt-days">Days</label><input id="bt-days" name="days" type="number" min="1" max="30" value="7" inputmode="numeric"></div>
+              </div>
+              <button type="submit" class="btn btn-primary bt-run" id="bt-run">Run Backtest</button>
+            </form>
+            <div class="bt-results" id="bt-results" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+
+      <div class="landing-section-divider"></div>
+
       <!-- ── Crypto Network Scroll Animation ── -->
       <section class="landing-section crypto-network-section" id="crypto-network">
         <div class="crypto-network-stage">
@@ -3606,6 +3667,50 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         });
       }
     })();
+  </script>
+
+  <!-- ── Live Backtest wiring ── -->
+  <script>
+  (function(){
+    const form = document.getElementById('bt-form');
+    const out  = document.getElementById('bt-results');
+    const btn  = document.getElementById('bt-run');
+    if (!form) return;
+    const fmt = (n,d=1)=> (n==null||isNaN(n)) ? '—' : Number(n).toFixed(d);
+    const cls = n => n>0 ? 'bt-pos' : (n<0 ? 'bt-neg' : '');
+    const sym = s => s.replace('USDT','');
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const tokens = [...form.querySelectorAll('input[name="tok"]:checked')].map(c=>c.value);
+      if (!tokens.length){ out.innerHTML='<div class="bt-msg">Pick at least one token.</div>'; return; }
+      const body = { tokens, leverage:+form.lev.value, sl:+form.sl.value, tp:+form.tp.value, days:+form.days.value };
+      btn.disabled=true; btn.textContent='Running…';
+      out.innerHTML='<div class="bt-msg">Running on recent market data…</div>';
+      try{
+        const res = await fetch('/api/backtest/expo',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+        const d = await res.json();
+        if (!d.ok){ out.innerHTML=`<div class="bt-msg">${d.error||'Backtest failed.'}</div>`; return; }
+        render(d);
+      }catch(_){ out.innerHTML='<div class="bt-msg">Network error — try again.</div>'; }
+      finally{ btn.disabled=false; btn.textContent='Run Backtest'; }
+    });
+    function render(d){
+      const a=d.aggregate, p=d.params;
+      const rows = d.perToken.map(t=> t.error
+        ? `<tr><td>${sym(t.symbol)}</td><td colspan="4" style="opacity:.5;text-align:left">${t.error}</td></tr>`
+        : `<tr><td>${sym(t.symbol)}</td><td>${t.trades}</td><td>${fmt(t.winRate)}%</td><td>${t.profitFactor==null?'∞':fmt(t.profitFactor,2)}</td><td class="${cls(t.totalReturnPct)}">${t.totalReturnPct>0?'+':''}${fmt(t.totalReturnPct)}%</td></tr>`
+      ).join('');
+      out.innerHTML = `
+        <div class="bt-agg">
+          <div class="bt-stat"><div class="v ${cls(a.totalReturnPct)}">${a.totalReturnPct>0?'+':''}${fmt(a.totalReturnPct)}%</div><div class="k">Total Return</div></div>
+          <div class="bt-stat"><div class="v">${fmt(a.winRate)}%</div><div class="k">Win Rate</div></div>
+          <div class="bt-stat"><div class="v">${a.profitFactor==null?'∞':fmt(a.profitFactor,2)}</div><div class="k">Profit Factor</div></div>
+          <div class="bt-stat"><div class="v">${a.trades}</div><div class="k">Trades</div></div>
+        </div>
+        <table class="bt-table"><thead><tr><th>Token</th><th>Trades</th><th>Win%</th><th>PF</th><th>Return</th></tr></thead><tbody>${rows}</tbody></table>
+        <div class="bt-note">${p.tokens.length} token(s) · ${p.leverage}x · SL ${p.slMarginPct}% / TP ${p.tpMarginPct}% margin · ${p.days}d. ${d.note}</div>`;
+    }
+  })();
   </script>
 
 </body>

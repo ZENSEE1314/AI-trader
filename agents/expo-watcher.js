@@ -18,8 +18,32 @@
 
 const TradingView = require('@mathieuc/tradingview');
 const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
 
 const bLog = (...a) => console.log('[Expo-Watcher]', ...a);
+
+// ── Persist Expo HH/HL/LH/LL labels to the cache the homepage backtester reads ──
+// Reuses this watcher's existing TV connection (no extra connections). Throttled.
+const LABELS_DIR = path.join(__dirname, '..', 'data', 'expo-labels');
+const _lastPersist = {};
+const PERSIST_MS = 3 * 60 * 1000;
+function persistLabels(sym, labels, periods) {
+  if (Date.now() - (_lastPersist[sym] || 0) < PERSIST_MS) return;
+  _lastPersist[sym] = Date.now();
+  try {
+    const out = [];
+    for (const l of labels) {
+      if (l.x == null || !/^(HH|HL|LH|LL)$/.test(l.text || '')) continue;
+      const bar = periods[l.x];
+      if (bar) out.push({ time: bar.time * 1000, type: l.text, price: l.y });
+    }
+    if (out.length < 4) return;
+    out.sort((a, b) => a.time - b.time);
+    fs.mkdirSync(LABELS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(LABELS_DIR, `${sym}-15m-expo.json`), JSON.stringify(out));
+  } catch (_) {}
+}
 
 // ── Config ───────────────────────────────────────────────────────
 const EXPO_ID      = 'PUB;26ae10374a9d4b0591b5b51a41356e57';   // Smart Money Concept (Expo)
@@ -94,6 +118,8 @@ function watch15m(client, ind, tvTicker) {
       const labels  = (study.graphic && study.graphic.labels) || [];
       const periods = chart.periods || [];   // newest-first; label.x = bars-from-newest
       if (!labels.length || !periods.length) return;
+
+      persistLabels(sym, labels, periods);   // keep the homepage backtest cache fresh
 
       // Most recent readable HL/LH label (x != null = confirmed/positioned).
       let newest = null;
