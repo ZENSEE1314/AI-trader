@@ -18,7 +18,6 @@
 
 const TradingView = require('@mathieuc/tradingview');
 const fetch = require('node-fetch');
-const { injectTVSignal } = require('../cycle');
 
 const bLog = (...a) => console.log('[Expo-Watcher]', ...a);
 
@@ -158,15 +157,16 @@ async function scanEntries() {
       biasMap[sym].traded = true;   // one trade per bias window
 
       bLog(`[${sym}][1m] *** TRADE ${dir} | price=${price} | Expo bias + 1m swing | baseline SL50/TP35 ***`);
-      injectTVSignal({
+      const signal = {
         symbol: sym,
         side: isLong ? 'BUY' : 'SELL',
         direction: dir,
         price,
+        lastPrice: price,
         zone: 'EXPO',
         pivot: isLong ? 'HL' : 'LH',
         setup: 'EXPO_BASELINE',
-        // cycle.js stores `setupName || setup` in trades.setup, and the trailing-skip
+        // cycle.js stores `setupName || setup` in trades.setup, and the EXPO branches/
         // guards match setup === 'EXPO_BASELINE' — so setupName MUST be exactly that.
         setupName: 'EXPO_BASELINE',
         score: 75,
@@ -174,13 +174,27 @@ async function scanEntries() {
         source: 'expo-watcher',
         timeframe: '1',
         leverage: LEVERAGE,
-        slMarginFrac: SL_MARGIN / LEVERAGE,   // price-% (0.50/20 = 0.025)
-        tpMarginFrac: TP_MARGIN / LEVERAGE,   // price-% (0.35/20 = 0.0175)
-        noTrail: true,
+        slMarginFrac: SL_MARGIN / LEVERAGE,
+        tpMarginFrac: TP_MARGIN / LEVERAGE,
         isMomentumBreakout: true,
         override: true,
         receivedAt: Date.now(),
-      });
+      };
+      // Route through the ACTIVE executor (Coordinator → TraderAgent → executeForAllUsers).
+      // injectTVSignal()/_tvSignalQueue is the LEGACY path — its consumer (cycle.run/main)
+      // is not running, so signals there never execute. TraderAgent is what VWAP-PB used.
+      try {
+        const { getCoordinator } = require('../agents');
+        const coord = getCoordinator && getCoordinator();
+        if (coord && coord.traderAgent && !coord.traderAgent.paused) {
+          await coord.traderAgent.execute({ signals: [signal], mode: 'signals' });
+          bLog(`[${sym}][1m] → TraderAgent (active path) executed`);
+        } else {
+          bLog(`[${sym}][1m] TraderAgent unavailable — signal dropped`);
+        }
+      } catch (e) {
+        bLog(`[${sym}][1m] routing error: ${e.message}`);
+      }
     } catch (e) { bLog(`[${sym}][1m] scan error: ${e.message}`); }
   }
   _scanTimer = setTimeout(scanEntries, SCAN_MS);

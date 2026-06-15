@@ -91,6 +91,17 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('smart-vision', this.smartVisionAgent);
     this._agents.set('vwap-pullback', this.vwapPullbackAgent);
 
+    // ── STRIPPED DOWN: SMC/Expo strategy (expo-watcher, standalone) + TraderAgent only ──
+    // Per owner: delete the rest. Every agent except the trade executor is paused so the
+    // coordinator stops running AI/optimizer/coder/sentiment/etc. noise. The Expo watcher
+    // routes its signals straight into TraderAgent.execute(). TraderAgent stays active for
+    // execution + position management.
+    for (const [name, agent] of this._agents) {
+      if (name !== 'trader' && agent) {
+        try { agent.paused = true; agent.disabled = true; } catch (_) {}
+      }
+    }
+
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
       // SMC_ONLY_MODE: V4/chart signals are informational only — SMCProAgent handles execution.
@@ -176,19 +187,7 @@ class AgentCoordinator extends BaseAgent {
           this.logError(`[BOOT] ${name} init failed (non-fatal): ${err.message}`);
         }
 
-        // Listen for agent crashes to trigger self-healing
-        agent.on('agent_crash', async (report) => {
-          this.log(`CRASH DETECTED: ${report.agentName} failed. Notifying CoderAgent...`);
-          try {
-            await this.coderAgent.healAgent({
-              agent: agent,
-              error: report.error,
-              timestamp: report.timestamp
-            });
-          } catch (err) {
-            this.logError(`Self-healing trigger failed: ${err.message}`);
-          }
-        });
+        // Self-healing / CoderAgent removed — no auto-heal on crash.
       });
       await Promise.all(initPromises);
 
@@ -423,11 +422,13 @@ class AgentCoordinator extends BaseAgent {
 
     this.log('CEO always-on loop started (30s micro-cycles)');
 
-    // 24/7 SmartVisionAgent — self-ticking every 60s, Ollama AI + TradingView TA
-    this.smartVisionAgent.start().catch(err => {
-      this.logError(`SmartVisionAgent start failed: ${err.message}`);
-    });
-    this.log('SmartVisionAgent started — 24/7 AI trading active');
+    // SmartVisionAgent disabled (stripped down to SMC/Expo + trader).
+    if (!this.smartVisionAgent.paused) {
+      this.smartVisionAgent.start().catch(err => {
+        this.logError(`SmartVisionAgent start failed: ${err.message}`);
+      });
+      this.log('SmartVisionAgent started — 24/7 AI trading active');
+    }
   }
 
   async _microCycle() {

@@ -51,16 +51,16 @@ setInterval(cleanBotLogs, 6 * 60 * 60 * 1000); // every 6 hours
   }
 })();
 
-// Start 24/7 exhaustive strategy optimizer (background — non-blocking)
-(async () => {
-  try {
-    const optimizer = require('./exhaustive-optimizer');
-    await optimizer.start();
-    console.log('[SERVER] Exhaustive optimizer started');
-  } catch (err) {
-    console.error('[SERVER] Exhaustive optimizer failed to start:', err.message);
-  }
-})();
+// Exhaustive optimizer DISABLED per owner (backtests treated as unreliable — no more testing).
+// (async () => {
+//   try {
+//     const optimizer = require('./exhaustive-optimizer');
+//     await optimizer.start();
+//     console.log('[SERVER] Exhaustive optimizer started');
+//   } catch (err) {
+//     console.error('[SERVER] Exhaustive optimizer failed to start:', err.message);
+//   }
+// })();
 
 // ── Performance: gzip compression (saves 60-80% bandwidth) ──
 app.use(compression({ threshold: 1024 }));
