@@ -39,15 +39,15 @@ setInterval(cleanBotLogs, 6 * 60 * 60 * 1000); // every 6 hours
   }
 })();
 
-// Start SMC Pro Suite watcher — reads indicator signal live from TradingView
-// No webhook / no premium account needed. Fires trades when SIGNAL = LONG/SHORT.
+// Start Expo baseline watcher — reads SMC Expo HL/LH labels live (BTC/ETH/SOL),
+// native 1m swing entry, 20x, hard SL50/TP35. Replaces the SMC Pro watcher.
 (async () => {
   try {
-    const watcher = require('./agents/smc-suite-watcher');
+    const watcher = require('./agents/expo-watcher');
     await watcher.start();
-    console.log('[SERVER] SMC Pro Suite watcher started');
+    console.log('[SERVER] Expo baseline watcher started (BTC/ETH/SOL, 20x, SL50/TP35)');
   } catch (err) {
-    console.error('[SERVER] SMC Pro Suite watcher failed to start:', err.message);
+    console.error('[SERVER] Expo baseline watcher failed to start:', err.message);
   }
 })();
 

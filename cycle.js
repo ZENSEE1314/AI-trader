@@ -2117,7 +2117,7 @@ async function executeForAllUsers(pick) {
         // The legacy BTC/ETH LL→LH / HH→HL pattern rule it replaced was removed.
         const SMC_PRO_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']);
         const isProfessionalBacktestSetup =
-          (pick.setup === 'SMC_PRO_SUITE' && SMC_PRO_SYMBOLS.has(symbol));
+          ((pick.setup === 'SMC_PRO_SUITE' || pick.setup === 'EXPO_BASELINE') && SMC_PRO_SYMBOLS.has(symbol));
           // VWAP_PULLBACK retired — its agent is disabled (agent-coordinator.js 6e).
         if (PROFESSIONAL_STRATEGY_ONLY && !isProfessionalBacktestSetup) {
           userLog.trade(
@@ -2128,7 +2128,10 @@ async function executeForAllUsers(pick) {
         }
 
         // ── Read ALL user settings from DB ──
-        const userLev = await getTokenLeverage(symbol, key.id, price);
+        let userLev = await getTokenLeverage(symbol, key.id, price);
+        // Expo baseline is validated only at 20x — BTC's default 75x would turn the
+        // 50%-margin stop into a 0.67% price stop (over-leveraged, liquidation risk).
+        if (pick.setup === 'EXPO_BASELINE') userLev = pick.leverage || 20;
         if (userLev === null) {
           userLog.trade(`User ${key.email}: ${symbol} has no token configuration — skipped`);
           return;
@@ -2163,7 +2166,12 @@ async function executeForAllUsers(pick) {
 
         let dirSl  = activeVer?.[dirSlKey]  != null && parseFloat(activeVer[dirSlKey])  > 0 ? parseFloat(activeVer[dirSlKey])  : globalSl;
         let dirTp  = activeVer?.[dirTpKey]  != null && parseFloat(activeVer[dirTpKey])  > 0 ? parseFloat(activeVer[dirTpKey])  : globalTp;
-        if (isProfessionalBacktestSetup && pick.strategy !== 'VWAP_PULLBACK') {
+        if (pick.setup === 'EXPO_BASELINE') {
+          // Baseline Expo (20x): hard SL −50% / TP +35% of margin. Trailing kept ON
+          // (profit-lock only — never deepens a loss); pure no-trail is a later step.
+          dirSl = 0.50 / userLev;
+          dirTp = 0.35 / userLev;
+        } else if (isProfessionalBacktestSetup && pick.strategy !== 'VWAP_PULLBACK') {
           dirSl = 0.50 / userLev;
           dirTp = 0.75 / userLev;
         } else if (pick.strategy === 'VWAP_PULLBACK') {
