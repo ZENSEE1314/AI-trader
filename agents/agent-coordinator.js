@@ -196,32 +196,13 @@ class AgentCoordinator extends BaseAgent {
       });
       await Promise.all(initPromises);
 
-      this.log('[BOOT] System agents initialized. Loading token agents...');
-      // Create dedicated token agents for top coins by volume
-      for (const symbol of DEFAULT_TOKEN_AGENTS) {
-        this.addTokenAgent(symbol);
-      }
-
-      // Fetch top coins by volume from Binance — non-blocking (don't delay boot)
-      this._fetchTopTokens().catch(err => this.logError(`[BOOT] Top tokens fetch failed: ${err.message}`));
-
-      this.log('[BOOT] Starting background agent loops...');
-      // Wire coordinator reference for agents that need it (already init()-ed above)
-      // NOTE: do NOT call .init() again here — initPromises already booted all agents.
-      // Double-init causes duplicate scan timers and race conditions in CoderAgent.
-      this.strategyAgent.setCoordinator(this);
-      this.coderAgent.setCoordinator(this);
-      this.optimizerAgent.setCoordinator(this);
-
-      // Cross-agent knowledge sharing — strategies flow between agents
-      this._wireStrategySharing();
-
-      this.log(`[BOOT] Agent framework ready — ${this._agents.size} system agents + ${this.tokenAgents.size} token agents`);
-
-      this.log('[BOOT] Activating CEO and Token Scan loops...');
-      this._startCeoLoop();
-      this._startTokenScanLoop();
-      this.log('[BOOT] FULLY OPERATIONAL.');
+      // ── STRIPPED DOWN ──────────────────────────────────────────────
+      // No token agents (BTCAgent/ETHAgent = the OLD chart-signal pipeline), no
+      // top-token fetch, no token-scan loop, no cross-agent strategy sharing, no
+      // setCoordinator for paused agents (those start scan timers). The Expo watcher
+      // is the SOLE signal source → TraderAgent. Only trader/accountant/kronos run.
+      this._startCeoLoop();   // heartbeat + position management (no token signals)
+      this.log(`[BOOT] FULLY OPERATIONAL — Expo signal + trader/accountant/kronos only (${[...this._agents].filter(([,a])=>!a.paused).length} active agents).`);
     } catch (criticalError) {
       this.logError(`[BOOT] CRITICAL INITIALIZATION FAILURE: ${criticalError.message}`);
       this.logError(criticalError.stack);
@@ -412,8 +393,7 @@ class AgentCoordinator extends BaseAgent {
       this.logError(`Failed to hook trade outcomes: ${err.message}`);
     }
 
-    // Retroactive sync: reset any dead agents from bad retro-sync, recalculate survival
-    this._resetAndRetroSync().catch(e => this.logError(`Retro sync failed: ${e.message}`));
+    // Retro-sync removed — survival/RPG recalc over 1841 old trades was old-framework noise.
 
     clearInterval(this._ceoTimer);
     this._ceoTimer = setInterval(async () => {
@@ -439,86 +419,23 @@ class AgentCoordinator extends BaseAgent {
   async _microCycle() {
     this._microCycleCount++;
     const now = Date.now();
+    this.currentTask = { description: `Heartbeat #${this._microCycleCount}`, startedAt: now };
 
-    // Update CEO task display
-    this.currentTask = { description: `Cycle #${this._microCycleCount} — monitoring ${this.tokenAgents.size} tokens`, startedAt: now };
-
-    // 1. Sync trade status + check top-ups (every micro-cycle)
+    // 1. Position management every cycle — sync trades + top-ups. (Signals come from
+    //    the Expo watcher straight into TraderAgent; trail-watchdog handles trailing.)
     try {
-      this.traderAgent.currentTask = { description: 'Syncing positions...', startedAt: now };
       const { syncTradeStatus, checkUsdtTopups } = require('../cycle');
       await syncTradeStatus();
       await checkUsdtTopups();
-      this.traderAgent.currentTask = { description: 'Monitoring positions', startedAt: now };
     } catch (err) {
       this.addActivity('error', `Sync error: ${err.message}`);
     }
 
-    // 2. Check if it's time for a full pipeline scan
-    const timeSinceFullCycle = now - this._lastFullCycleAt;
-    if (timeSinceFullCycle >= this.FULL_CYCLE_INTERVAL_MS && !this.cycleRunning) {
-      this.run({ forced: false }).catch(err => {
-        this.addActivity('error', `Full cycle error: ${err.message}`);
-      });
-    }
-
-    // 3. Competition: update leaderboard and rivalries every 5 micro-cycles
-    if (this._microCycleCount % 5 === 0) {
-      this.updateRivalries();
-    }
-
-    // 4. Generate thoughts for all agents every 10 micro-cycles (~5 min)
+    // 2. Kronos predictions + accountant (commissions/history) every ~5 min.
     if (this._microCycleCount % 10 === 0) {
-      this.generateAllThoughts();
-      this.getLeaderboard(); // refresh ranks
+      if (this.kronosAgent && !this.kronosAgent.paused)     this.kronosAgent.run().catch(() => {});
+      if (this.accountantAgent && !this.accountantAgent.paused) this.accountantAgent.run().catch(() => {});
     }
-
-    // 5. Swarm Accuracy Auditor (verify predictions every 20 micro-cycles ~10 min)
-    if (this._microCycleCount % 20 === 0) {
-      try {
-        const { verifySwarmPredictions } = require('../kronos');
-        await verifySwarmPredictions();
-      } catch (err) {
-        this.addActivity('error', `Swarm Auditor error: ${err.message}`);
-      }
-    }
-
-    // 6b. SMC Pro Agent — DISABLED: only SMCPatternAgent (15m+1m rule) trades
-    // this.smcProAgent.execute({ coordinator: this }).catch(() => {});
-
-    // 6c. SMC Pattern Agent — DISABLED: signals now come from Pine Suite watcher only
-    // Internal LH/HL detection doesn't match TradingView chart — replaced by
-    // smc-suite-watcher.js which reads the actual Pine Script indicator live.
-    // this.smcPatternAgent.execute({ coordinator: this }).catch(() => {});
-
-    // 6d. PolyBTC Agent — DISABLED (Polymarket trading removed)
-
-    // 6e. VWAP Pullback Agent — DISABLED.
-    // Retired so the SMC 15m-LH/HL structure watcher (smc-suite-watcher.js) is the
-    // sole live signal source. This agent computed its OWN 15m LH/HL natively from
-    // Bybit klines, independent of the chart indicator, so it opened trades (e.g. an
-    // ETH short) with no LH on the indicator — confusing and off-strategy.
-    // To re-enable: restore the execute() call below.
-    // if (!this.vwapPullbackAgent.paused) {
-    //   this.vwapPullbackAgent.execute({ coordinator: this }).catch(err => {
-    //     this.addActivity('error', `VwapPullbackAgent error: ${err.message}`);
-    //   });
-    // }
-
-    // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
-    if (this._microCycleCount % 60 === 0) {
-      const agentList = [...this._agents.values()].filter(a => a !== this);
-      const reflectAgent = agentList[this._microCycleCount % agentList.length];
-      if (reflectAgent) {
-        reflectAgent.selfReflect().catch(() => {});
-      }
-    }
-
-    // 8. Update CEO display
-    const board = this.getLeaderboard();
-    const topAgent = board[0];
-    const topDisplay = topAgent ? ` | #1: ${topAgent.name} Lv.${topAgent.level}` : '';
-    this.currentTask = { description: `Commanding ${this.tokenAgents.size} tokens${topDisplay}`, startedAt: Date.now() };
   }
 
   // ── Staggered Token Scan Loop ──────────────────────────────
