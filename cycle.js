@@ -30,7 +30,7 @@ const {
   TRAILING_TIERS_100X: TRAILING_TIERS,
   TRAILING_TIERS_75X, TRAILING_TIERS_50X,
   SAFETY_TRAIL_TRIGGER, SAFETY_TRAIL_LOCK,
-  setDynamicTiers, buildTierTable, tierTableForLev, calculateTrailingStep,
+  setDynamicTiers, buildTierTable, tierTableForLev, calculateTrailingStep, calculateExpoTrail,
 } = require('./trail-tiers');
 
 // ── Trade outcome callback — agents hook in to track survival ──
@@ -1168,13 +1168,15 @@ async function checkTrailingStop(client) {
       // ── Trailing SL step check (v4 tier ladder) ─────────────
       // Skip for Rev-SMC trades — they exit on 5m structure reversal
       let trailResult;
-      if (state.exitMode === 'REV' || state.setup === 'EXPO_BASELINE') {
-        // EXPO_BASELINE: pure baseline — ride to the hard SL/TP, no trailing.
+      if (state.exitMode === 'REV') {
         trailResult = null;
       } else {
         const lev      = state.leverage || 20;
         const lastStep = state.trailingSlLastStep || 0;
-        const step = calculateTrailingStep(state.entry, cur, state.isLong, lastStep, lev);
+        // EXPO_BASELINE: custom trail — no lock until TP1 (+35%), then +15/+10 tiers.
+        const step = state.setup === 'EXPO_BASELINE'
+          ? calculateExpoTrail(state.entry, cur, state.isLong, lastStep, lev)
+          : calculateTrailingStep(state.entry, cur, state.isLong, lastStep, lev);
         if (step && step.newSlPrice) {
           const betterSl = state.isLong
             ? step.newSlPrice > (state.trailingSlPrice || 0)
@@ -2254,7 +2256,9 @@ async function executeForAllUsers(pick) {
           // Other strategies: fixed 30% margin SL, no hard TP (trailing handles exit)
           const isRangeBounce = pick.setup === 'RANGE_BOUNCE';
           const slPrice = (isRangeBounce && pick.sl) ? pick.sl : initialSlPrice;
-          const bnTpPrice = isProfessionalBacktestSetup
+          // EXPO_BASELINE: no hard TP — it rides on calculateExpoTrail (locks +35% at
+          // TP1, then trails +15/+10). Other professional setups keep their hard TP.
+          const bnTpPrice = (isProfessionalBacktestSetup && pick.setup !== 'EXPO_BASELINE')
             ? userTpPrice
             : (isRangeBounce && pick.tp1) ? pick.tp1 : null;
 
@@ -2488,8 +2492,8 @@ async function executeForAllUsers(pick) {
           // TP: Range Bounce uses hard TP at opposite wall, Scenario A at +3.5%, others none
           const bxEntryRef = price;
           let bxTpPrice = null;
-          if (isProfessionalBacktestSetup) {
-            bxTpPrice = parseFloat(parseFloat(userTpPrice).toFixed(8));
+          if (isProfessionalBacktestSetup && pick.setup !== 'EXPO_BASELINE') {
+            bxTpPrice = parseFloat(parseFloat(userTpPrice).toFixed(8));   // EXPO rides on the trail — no hard TP
           } else if ((isScenarioA || isRangeBounce) && pick.tp1) {
             bxTpPrice = parseFloat(parseFloat(pick.tp1).toFixed(8));
           }
@@ -3202,8 +3206,11 @@ async function syncTradeStatus() {
               // ── Candle-low trail: move SL to last completed 15m candle low/high ──
               let binNewSl = null;
               let binSlSource = '';
-              // EXPO_BASELINE: pure baseline — never trail; ride to the hard SL/TP.
-              if (trade.setup !== 'EXPO_BASELINE') {
+              if (trade.setup === 'EXPO_BASELINE') {
+                // Custom Expo trail: no lock until TP1 (+35%), then +15/+10 tiers.
+                const er = calculateExpoTrail(entryPrice, curPrice, isLong, lastStep, tradeLev);
+                if (er) { binNewSl = er.newSlPrice; binSlSource = 'expo'; }
+              } else {
                 const binCandleTrail = await calcCandleTrailSl(trade.symbol, isLong, currentSlBin);
                 if (binCandleTrail && pricePctDebug > 0.002) {
                   binNewSl = binCandleTrail.newSl;

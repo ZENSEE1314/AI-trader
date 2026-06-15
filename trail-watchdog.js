@@ -19,7 +19,7 @@ const { BitunixClient } = require('./bitunix-client');
 const { USDMClient } = require('binance');
 const { getFetchOptions, getBinanceRequestOptions } = require('./proxy-agent');
 const cryptoUtils = require('./crypto-utils');
-const { calculateTrailingStep, setDynamicTiers, buildTierTable } = require('./trail-tiers');
+const { calculateTrailingStep, calculateExpoTrail, setDynamicTiers, buildTierTable } = require('./trail-tiers');
 
 // Load TSL tier config from v4_config DB table — same tables cycle.js uses.
 // Falls back to trail-tiers.js hardcoded defaults when DB is unavailable.
@@ -285,10 +285,6 @@ async function runTrailCycle() {
             ? Math.max(inferPricePrec(dbTrade.sl_price), inferPricePrec(dbTrade.entry_price))
             : inferPricePrec(entry);
 
-          // EXPO_BASELINE: pure baseline — no trailing. Leave the entry SL/TP on
-          // the exchange untouched so the trade rides to the hard 50% SL / 35% TP.
-          if (dbTrade?.setup === 'EXPO_BASELINE') continue;
-
           // ── Exchange SL sync guard ─────────────────────────────────────
           // Bitunix position data may include the current SL price on the exchange.
           // If the exchange already has a more protective SL (e.g., from a previous
@@ -358,7 +354,9 @@ async function runTrailCycle() {
             : isLong  ? Math.max(0, (currentSl / entry - 1) * leverage)
                       : Math.max(0, (1 - currentSl / entry) * leverage);
 
-          const trailResult = calculateTrailingStep(entry, livePrice, isLong, lastStep, leverage);
+          const trailResult = dbTrade?.setup === 'EXPO_BASELINE'
+            ? calculateExpoTrail(entry, livePrice, isLong, lastStep, leverage)   // no lock until TP1 (+35%), then +15/+10
+            : calculateTrailingStep(entry, livePrice, isLong, lastStep, leverage);
           if (!trailResult) {
             log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} not yet at T1 (${leverage}x lv${(lastStep*100).toFixed(0)}% already locked)`);
             continue;
@@ -424,7 +422,6 @@ async function runTrailCycle() {
         const apiKey    = cryptoUtils.decrypt(key.api_key_enc,    key.iv,        key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
         if (!apiKey || !apiSecret) continue;
-        if (trade.setup === 'EXPO_BASELINE') continue;  // baseline — no trailing
 
         const isLong     = trade.direction !== 'SHORT';
         const currentSl  = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
@@ -442,7 +439,9 @@ async function runTrailCycle() {
           : isLong  ? Math.max(0, (currentSl / entryPrice - 1) * leverage)
                     : Math.max(0, (1 - currentSl / entryPrice) * leverage);
 
-        const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, leverage);
+        const trailResult = trade.setup === 'EXPO_BASELINE'
+          ? calculateExpoTrail(entryPrice, curPrice, isLong, lastStep, leverage)   // no lock until TP1 (+35%), then +15/+10
+          : calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, leverage);
         if (!trailResult) continue;
 
         const bestSl   = trailResult.newSlPrice;

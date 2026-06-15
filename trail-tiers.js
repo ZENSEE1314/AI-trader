@@ -248,7 +248,30 @@ function calculateTrailingStep(
   return { stepped: true, newSlPrice, newLastStep: bestLockCapitalPct };
 }
 
+// ── calculateExpoTrail ────────────────────────────────────────────
+// Custom trailing for EXPO_BASELINE (user scheme): NO lock until +35% capital
+// (TP1). At +35% → lock +35% (SL moves to the TP1 price). Then every +15% capital
+// gain, raise the lock by +10% (+45% at +50%, +55% at +65%, +65% at +80% …).
+// Ratchets — never moves the SL backward. Returns { stepped, newSlPrice, newLastStep }
+// or null (not at a new lock yet).
+function calculateExpoTrail(entryPrice, currentPrice, isLong, lastStep, leverage = 20) {
+  const pricePct = isLong
+    ? (currentPrice - entryPrice) / entryPrice
+    : (entryPrice - currentPrice) / entryPrice;
+  const cap = pricePct * leverage;
+  if (cap < 0.35) return null;                     // no lock until TP1 (+35%)
+  const steps   = Math.floor((cap - 0.35) / 0.15 + 1e-9); // +15% steps above TP1 (eps for float boundary)
+  const lockCap = 0.35 + steps * 0.10;             // +10% lock per step (TP1 itself locks +35%)
+  if (lockCap <= lastStep) return null;            // ratchet guard
+  const lockPricePct = lockCap / leverage;
+  const newSlPrice = isLong
+    ? entryPrice * (1 + lockPricePct)
+    : entryPrice * (1 - lockPricePct);
+  return { stepped: true, newSlPrice, newLastStep: lockCap };
+}
+
 module.exports = {
+  calculateExpoTrail,
   TRAILING_TIERS_100X,
   TRAILING_TIERS_75X,
   TRAILING_TIERS_50X,
