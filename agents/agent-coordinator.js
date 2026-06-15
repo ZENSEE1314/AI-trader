@@ -91,13 +91,16 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('smart-vision', this.smartVisionAgent);
     this._agents.set('vwap-pullback', this.vwapPullbackAgent);
 
-    // ── STRIPPED DOWN: SMC/Expo strategy (expo-watcher, standalone) + TraderAgent only ──
-    // Per owner: delete the rest. Every agent except the trade executor is paused so the
-    // coordinator stops running AI/optimizer/coder/sentiment/etc. noise. The Expo watcher
-    // routes its signals straight into TraderAgent.execute(). TraderAgent stays active for
-    // execution + position management.
+    // ── STRIPPED DOWN per owner — keep only 4 roles, pause everything else ──
+    //   trader     — execute on all user APIs + trail SL/TP
+    //   accountant — record trade history, manage referral/account commissions
+    //   kronos     — token predictions
+    //   (chart/signals come from the standalone Expo watcher → TraderAgent.execute())
+    // The native ChartAgent and all AI/optimizer/coder/sentiment/polymarket/vwap noise
+    // is paused. The professional-mode gate also blocks any non-EXPO_BASELINE signal.
+    const KEEP_AGENTS = new Set(['trader', 'accountant', 'kronos']);
     for (const [name, agent] of this._agents) {
-      if (name !== 'trader' && agent) {
+      if (!KEEP_AGENTS.has(name) && agent) {
         try { agent.paused = true; agent.disabled = true; } catch (_) {}
       }
     }
