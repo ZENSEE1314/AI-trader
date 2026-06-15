@@ -325,7 +325,7 @@ class AccountantAgent extends BaseAgent {
             posCache[sym] = await client.getHistoryPositions({
               symbol: sym, pageSize: 200, all: true,
             });
-            bLog.system(`[ACCT-SYNC] key#${key.id} ${sym}: ${posCache[sym].length} history positions`);
+            // per-symbol "N history positions" log removed (was 20+ lines per key — noise)
           } catch (e) {
             bLog.error(`[ACCT-SYNC] key#${key.id} ${sym} fetch error: ${e.message}`);
             posCache[sym] = [];
@@ -535,7 +535,7 @@ class AccountantAgent extends BaseAgent {
           ]
         );
         totalUpdated++;
-        bLog.system(`[ACCT-SYNC] trade#${trade.id} ${trade.symbol} ${trade.direction}: exit=$${exitPrice ?? '?'} gross=$${grossPnl ?? '?'} net=$${pnlUsdt ?? '?'} fee=$${tradingFee.toFixed(4)} status=${status ?? 'unchanged'}`);
+        // per-trade ACCT-SYNC log removed (noise) — see the totalUpdated summary at the end.
       }
 
       this.addActivity('success', `${key.email}: updated ${totalUpdated} trades`);
@@ -566,6 +566,9 @@ class AccountantAgent extends BaseAgent {
 
     this.currentTask = null;
     this.addActivity('success', `Bitunix sync complete: ${totalSynced} new, ${totalUpdated} updated`);
+    if (totalSynced > 0 || totalUpdated > 0) {
+      bLog.system(`[ACCT-SYNC] done: ${totalSynced} new, ${totalUpdated} updated`);
+    }
     return { ok: true, synced: totalSynced, updated: totalUpdated };
   }
 

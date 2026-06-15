@@ -431,10 +431,13 @@ class AgentCoordinator extends BaseAgent {
       this.addActivity('error', `Sync error: ${err.message}`);
     }
 
-    // 2. Kronos predictions + accountant (commissions/history) every ~5 min.
-    if (this._microCycleCount % 10 === 0) {
-      if (this.kronosAgent && !this.kronosAgent.paused)     this.kronosAgent.run().catch(() => {});
-      if (this.accountantAgent && !this.accountantAgent.paused) this.accountantAgent.run().catch(() => {});
+    // 2. Kronos predictions every ~15 min; accountant reconcile every ~1 h (it audits
+    //    full history, so don't run it often).
+    if (this._microCycleCount % 30 === 0 && this.kronosAgent && !this.kronosAgent.paused) {
+      this.kronosAgent.run().catch(() => {});
+    }
+    if (this._microCycleCount % 120 === 0 && this.accountantAgent && !this.accountantAgent.paused) {
+      this.accountantAgent.run().catch(() => {});
     }
   }
 
