@@ -1168,7 +1168,8 @@ async function checkTrailingStop(client) {
       // ── Trailing SL step check (v4 tier ladder) ─────────────
       // Skip for Rev-SMC trades — they exit on 5m structure reversal
       let trailResult;
-      if (state.exitMode === 'REV') {
+      if (state.exitMode === 'REV' || state.setup === 'EXPO_BASELINE') {
+        // EXPO_BASELINE: pure baseline — ride to the hard SL/TP, no trailing.
         trailResult = null;
       } else {
         const lev      = state.leverage || 20;
@@ -3201,18 +3202,20 @@ async function syncTradeStatus() {
               // ── Candle-low trail: move SL to last completed 15m candle low/high ──
               let binNewSl = null;
               let binSlSource = '';
-              const binCandleTrail = await calcCandleTrailSl(trade.symbol, isLong, currentSlBin);
-              if (binCandleTrail && pricePctDebug > 0.002) {
-                binNewSl = binCandleTrail.newSl;
-                binSlSource = binCandleTrail.source;
-              }
+              // EXPO_BASELINE: pure baseline — never trail; ride to the hard SL/TP.
+              if (trade.setup !== 'EXPO_BASELINE') {
+                const binCandleTrail = await calcCandleTrailSl(trade.symbol, isLong, currentSlBin);
+                if (binCandleTrail && pricePctDebug > 0.002) {
+                  binNewSl = binCandleTrail.newSl;
+                  binSlSource = binCandleTrail.source;
+                }
 
-              // ── Fallback: tier-based if candle trail didn't fire ──
-              // smcMode disabled: V4 SMC uses the full tier table at every step.
-              // smcMode was for the old 3-timing strategy (no longer active).
-              if (!binNewSl) {
-                const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct, false);
-                if (trailResult) { binNewSl = trailResult.newSlPrice; binSlSource = 'tier'; }
+                // ── Fallback: tier-based if candle trail didn't fire ──
+                // smcMode disabled: V4 SMC uses the full tier table at every step.
+                if (!binNewSl) {
+                  const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct, false);
+                  if (trailResult) { binNewSl = trailResult.newSlPrice; binSlSource = 'tier'; }
+                }
               }
 
               if (binNewSl) {

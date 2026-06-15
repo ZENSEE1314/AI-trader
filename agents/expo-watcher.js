@@ -155,7 +155,10 @@ async function scanEntries() {
         zone: 'EXPO',
         pivot: isLong ? 'HL' : 'LH',
         setup: 'EXPO_BASELINE',
-        setupName: `Expo ${isLong ? 'HL' : 'LH'} (1m swing, baseline)`,
+        // NOTE: cycle.js stores `setupName || setup` in the trades table, and the
+        // trailing-skip guards match setup === 'EXPO_BASELINE' — so setupName MUST be
+        // exactly that, else the stored value won't match and trailing won't be skipped.
+        setupName: 'EXPO_BASELINE',
         score: 75,
         signalType: `EXPO-${dir}`,
         source: 'expo-watcher',

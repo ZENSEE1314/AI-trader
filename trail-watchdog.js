@@ -285,6 +285,10 @@ async function runTrailCycle() {
             ? Math.max(inferPricePrec(dbTrade.sl_price), inferPricePrec(dbTrade.entry_price))
             : inferPricePrec(entry);
 
+          // EXPO_BASELINE: pure baseline — no trailing. Leave the entry SL/TP on
+          // the exchange untouched so the trade rides to the hard 50% SL / 35% TP.
+          if (dbTrade?.setup === 'EXPO_BASELINE') continue;
+
           // ── Exchange SL sync guard ─────────────────────────────────────
           // Bitunix position data may include the current SL price on the exchange.
           // If the exchange already has a more protective SL (e.g., from a previous
@@ -420,6 +424,7 @@ async function runTrailCycle() {
         const apiKey    = cryptoUtils.decrypt(key.api_key_enc,    key.iv,        key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
         if (!apiKey || !apiSecret) continue;
+        if (trade.setup === 'EXPO_BASELINE') continue;  // baseline — no trailing
 
         const isLong     = trade.direction !== 'SHORT';
         const currentSl  = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
