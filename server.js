@@ -128,7 +128,7 @@ app.get('/copy-trade', (req, res) => res.sendFile(path.join(__dirname, 'public',
 // Real-time trade monitor — polling loop + stats API
 app.use('/api/monitor', require('./routes/monitor'));
 app.use('/api/backtest', require('./routes/backtest'));   // public homepage live-backtest
-require('./monitor-agent').startMonitor();
+// require('./monitor-agent').startMonitor();  // [MONITOR] disabled per owner (old-trade replay noise)
 // Version info — public, no auth required
 const VERSION_INFO = require('./version.json');
 app.get('/api/version', (req, res) => {

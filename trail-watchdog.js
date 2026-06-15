@@ -20,6 +20,7 @@ const { USDMClient } = require('binance');
 const { getFetchOptions, getBinanceRequestOptions } = require('./proxy-agent');
 const cryptoUtils = require('./crypto-utils');
 const { calculateTrailingStep, calculateExpoTrail, setDynamicTiers, buildTierTable } = require('./trail-tiers');
+const _warnedExpiredKeys = new Set();   // throttle "key expired" log/notify to ONCE per key (was every 15s)
 
 // Load TSL tier config from v4_config DB table — same tables cycle.js uses.
 // Falls back to trail-tiers.js hardcoded defaults when DB is unavailable.
@@ -234,15 +235,20 @@ async function runTrailCycle() {
         // Token Invalid (code 10003) = API key expired on Bitunix — user must reconnect key.
         // Other errors = network / rate-limit — transient, no action needed.
         const isTokenInvalid = e.message.includes('10003') || e.message.toLowerCase().includes('token invalid');
-        log(`⚠ getOpenPositions FAILED for key ${key.id} (${key.email || 'unknown'}): ${e.message}` +
-            (isTokenInvalid ? ' — KEY EXPIRED: user must reconnect Bitunix API key in Settings' : ''));
         if (isTokenInvalid) {
-          await notify(
-            `⚠️ *API Key Expired*\n` +
-            `User: \`${key.email || key.id}\`\n` +
-            `Bitunix key #${key.id} returned Token Invalid.\n` +
-            `Trailing SL is *disabled* for this account until the key is reconnected in Settings.`
-          ).catch(() => {});
+          // An expired key fails every 15s — log + notify only ONCE per key per process.
+          if (!_warnedExpiredKeys.has(key.id)) {
+            _warnedExpiredKeys.add(key.id);
+            log(`⚠ Bitunix key #${key.id} (${key.email || 'unknown'}) EXPIRED — user must reconnect in Settings. Trailing disabled for this account.`);
+            await notify(
+              `⚠️ *API Key Expired*\n` +
+              `User: \`${key.email || key.id}\`\n` +
+              `Bitunix key #${key.id} returned Token Invalid.\n` +
+              `Trailing SL is *disabled* for this account until the key is reconnected in Settings.`
+            ).catch(() => {});
+          }
+        } else {
+          log(`⚠ getOpenPositions FAILED for key ${key.id}: ${e.message}`);
         }
         continue;
       }

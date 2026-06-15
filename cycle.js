@@ -1445,15 +1445,7 @@ async function main() {
     if (!runCycle._keyDiagDone) {
       runCycle._keyDiagDone = true;
       try {
-        const allDbKeys = await dbQuery(
-          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user,
-                  ak.loss_cooldown_until, ak.platform, u.email
-           FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
-        );
-        bLog.system(`[KEY-DIAG] ALL ${allDbKeys.length} api_keys: ${allDbKeys.map(k => {
-          const cd = k.loss_cooldown_until ? ` cd=${new Date(k.loss_cooldown_until).toISOString().slice(0,16)}` : '';
-          return `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} platform=${k.platform||'NULL'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}${cd}`;
-        }).join(' | ')}`);
+        // [KEY-DIAG] api_keys dump removed per owner (log noise).
       } catch (_) {}
       // Log active AI version — if enableLong/enableShort=false, trades are silently blocked
       try {
