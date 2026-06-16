@@ -91,10 +91,44 @@ async function fetch1m(symbol, limit = 5) {
     .sort((a, b) => a.time - b.time);
 }
 
+function recent1mStructure(c1m) {
+  const highs = [];
+  const lows = [];
+  for (let i = 1; i < c1m.length - 1; i++) {
+    if (c1m[i].high > c1m[i - 1].high && c1m[i].high > c1m[i + 1].high) {
+      highs.push({ price: c1m[i].high, time: c1m[i].time });
+    }
+    if (c1m[i].low < c1m[i - 1].low && c1m[i].low < c1m[i + 1].low) {
+      lows.push({ price: c1m[i].low, time: c1m[i].time });
+    }
+  }
+  const lastLow = lows[lows.length - 1] || null;
+  const prevLow = lows[lows.length - 2] || null;
+  const lastHigh = highs[highs.length - 1] || null;
+  const prevHigh = highs[highs.length - 2] || null;
+  return {
+    lastLow,
+    prevLow,
+    lastHigh,
+    prevHigh,
+    lastLowType: lastLow && prevLow ? (lastLow.price > prevLow.price ? 'HL' : 'LL') : null,
+    lastHighType: lastHigh && prevHigh ? (lastHigh.price < prevHigh.price ? 'LH' : 'HH') : null,
+  };
+}
+
+function isNearLevel(price, level, pct = 0.0015) {
+  return level && Math.abs(price - level) / level <= pct;
+}
+
 // 1m swing pullback: prev candle is a local low (long) / high (short). Enter on current bar.
 function detectEntry(c1m, bias) {
   if (c1m.length < 3) return null;
   const n = c1m.length, prev = c1m[n - 2], pre = c1m[n - 3], curr = c1m[n - 1];
+  const structure = recent1mStructure(c1m);
+  const price = curr.close;
+  if (bias === 'SHORT' && structure.lastLowType === 'HL' && isNearLevel(price, structure.lastLow.price)) {
+    return { blocked: true, reason: `near 1m HL ${structure.lastLow.price}` };
+  }
   if (bias === 'LONG'  && prev.low  < pre.low  && prev.low  < curr.low)  return 'LONG';
   if (bias === 'SHORT' && prev.high > pre.high && prev.high > curr.high) return 'SHORT';
   return null;
@@ -182,8 +216,13 @@ async function scanEntries() {
     if (!sessionOpen) continue;   // outside London/NY hours — no entries
     if (!canTrade(sym, b.direction)) continue;
     try {
-      const c1m = await fetch1m(BYBIT_SYM[sym], 5);
-      const dir = detectEntry(c1m, b.direction);
+      const c1m = await fetch1m(BYBIT_SYM[sym], 20);
+      const entry = detectEntry(c1m, b.direction);
+      if (entry?.blocked) {
+        bLog(`[${sym}][1m] ${b.direction} blocked — ${entry.reason}`);
+        continue;
+      }
+      const dir = entry;
       if (!dir) continue;
 
       const price = c1m[c1m.length - 1].close;
