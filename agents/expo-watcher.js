@@ -120,14 +120,32 @@ function isNearLevel(price, level, pct = 0.0015) {
   return level && Math.abs(price - level) / level <= pct;
 }
 
+function rangePosition(c1m) {
+  const high = Math.max(...c1m.map(c => c.high));
+  const low = Math.min(...c1m.map(c => c.low));
+  const close = c1m[c1m.length - 1].close;
+  const span = high - low;
+  return span > 0 ? (close - low) / span : 0.5;
+}
+
 // 1m swing pullback: prev candle is a local low (long) / high (short). Enter on current bar.
 function detectEntry(c1m, bias) {
   if (c1m.length < 3) return null;
   const n = c1m.length, prev = c1m[n - 2], pre = c1m[n - 3], curr = c1m[n - 1];
   const structure = recent1mStructure(c1m);
   const price = curr.close;
-  if (bias === 'SHORT' && structure.lastLowType === 'HL' && isNearLevel(price, structure.lastLow.price)) {
-    return { blocked: true, reason: `near 1m HL ${structure.lastLow.price}` };
+  const pos = rangePosition(c1m);
+  if (bias === 'SHORT' && structure.lastLow && isNearLevel(price, structure.lastLow.price, 0.0025)) {
+    return { blocked: true, reason: `near 1m support ${structure.lastLow.price}` };
+  }
+  if (bias === 'SHORT' && pos <= 0.35) {
+    return { blocked: true, reason: `in lower 1m range (${Math.round(pos * 100)}%)` };
+  }
+  if (bias === 'LONG' && structure.lastHigh && isNearLevel(price, structure.lastHigh.price, 0.0025)) {
+    return { blocked: true, reason: `near 1m resistance ${structure.lastHigh.price}` };
+  }
+  if (bias === 'LONG' && pos >= 0.65) {
+    return { blocked: true, reason: `in upper 1m range (${Math.round(pos * 100)}%)` };
   }
   if (bias === 'LONG'  && prev.low  < pre.low  && prev.low  < curr.low)  return 'LONG';
   if (bias === 'SHORT' && prev.high > pre.high && prev.high > curr.high) return 'SHORT';
@@ -216,7 +234,7 @@ async function scanEntries() {
     if (!sessionOpen) continue;   // outside London/NY hours — no entries
     if (!canTrade(sym, b.direction)) continue;
     try {
-      const c1m = await fetch1m(BYBIT_SYM[sym], 20);
+      const c1m = await fetch1m(BYBIT_SYM[sym], 40);
       const entry = detectEntry(c1m, b.direction);
       if (entry?.blocked) {
         bLog(`[${sym}][1m] ${b.direction} blocked — ${entry.reason}`);
