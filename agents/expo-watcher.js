@@ -52,6 +52,7 @@ const BYBIT_SYM    = { BTCUSDT: 'BTCUSDT', ETHUSDT: 'ETHUSDT', SOLUSDT: 'SOLUSDT
 const HISTORY_BARS = 300;
 const WINDOW_MS    = 120 * 60 * 1000;      // entry window once a fresh Expo HL/LH appears (8 × 15m)
 const FRESH_MS     = WINDOW_MS;            // Pine keeps HL/LH bias alive for piv_len + 3 bars
+const ENTRY_CONFIRM_MS = 5 * 60 * 1000;    // if no 1m structure appears in 5 candles, miss it
 const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
 const SCAN_MS      = 30_000;               // 1m entry scan cadence
 const LEVERAGE     = 20;
@@ -73,11 +74,12 @@ function inTradingSession() { const h = new Date().getUTCHours(); return h >= 7 
 function canTrade(sym, dir)   { return Date.now() - (cooldowns.get(`${sym}:${dir}`) || 0) > COOLDOWN_MS; }
 function markTraded(sym, dir) { cooldowns.set(`${sym}:${dir}`, Date.now()); }
 function normSym(tv)          { return tv.replace(/.*:/, '').replace(/[^A-Z]/g, '').replace('USDTP', 'USDT'); }
-// Bias is live for WINDOW_MS after a fresh label opened it; cleared after one trade.
+// Bias is live only for the first 5 one-minute candles after a fresh label.
+// If no 1m structure confirms inside that window, the 15m signal is missed.
 function biasAlive(sym) {
   const b = biasMap[sym];
   if (!b || b.traded) return null;
-  return Date.now() - b.openedAt < WINDOW_MS ? b : null;
+  return Date.now() - b.openedAt <= ENTRY_CONFIRM_MS ? b : null;
 }
 
 // ── Bybit 1m klines (ascending) ──────────────────────────────────
@@ -229,6 +231,12 @@ async function scanEntries() {
   const sessionOpen = inTradingSession();
   for (const tvTicker of TV_SYMBOLS) {
     const sym = normSym(tvTicker);
+    const rawBias = biasMap[sym];
+    if (rawBias && !rawBias.traded && Date.now() - rawBias.openedAt > ENTRY_CONFIRM_MS) {
+      rawBias.traded = true;
+      bLog(`[${sym}][1m] ${rawBias.direction} missed — no 1m structure within 5 candles`);
+      continue;
+    }
     const b = biasAlive(sym);
     if (!b) continue;
     if (!sessionOpen) continue;   // outside London/NY hours — no entries
