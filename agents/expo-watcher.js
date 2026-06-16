@@ -67,9 +67,9 @@ let   _client = null;
 let   _expoInd = null;
 let   _scanTimer = null;
 
-// Only trade the 3 main sessions: Asia 00-08 ∪ London 07-16 ∪ NY 13-21 UTC
-// = a continuous 00:00–21:00 UTC window. Block the 21:00–24:00 UTC dead gap.
-function inTradingSession() { const h = new Date().getUTCHours(); return h >= 0 && h < 21; }
+// Trade only London/NY hours. Asia session is blocked.
+// Allowed: 07:00-21:00 UTC (14:00-04:00 Jakarta).
+function inTradingSession() { const h = new Date().getUTCHours(); return h >= 7 && h < 21; }
 function canTrade(sym, dir)   { return Date.now() - (cooldowns.get(`${sym}:${dir}`) || 0) > COOLDOWN_MS; }
 function markTraded(sym, dir) { cooldowns.set(`${sym}:${dir}`, Date.now()); }
 function normSym(tv)          { return tv.replace(/.*:/, '').replace(/[^A-Z]/g, '').replace('USDTP', 'USDT'); }
@@ -179,7 +179,7 @@ async function scanEntries() {
     const sym = normSym(tvTicker);
     const b = biasAlive(sym);
     if (!b) continue;
-    if (!sessionOpen) continue;   // outside Asia/London/NY sessions (21:00–24:00 UTC) — no entries
+    if (!sessionOpen) continue;   // outside London/NY hours — no entries
     if (!canTrade(sym, b.direction)) continue;
     try {
       const c1m = await fetch1m(BYBIT_SYM[sym], 5);
