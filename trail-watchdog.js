@@ -477,10 +477,11 @@ async function runTrailCycle() {
 
 // ── Orphan Position Guard ──────────────────────────────────
 // Positions that exist on exchange but NOT in DB have no SL protection.
-// If they lose more than 25% capital with no stop, this guard closes them.
+// Keep the emergency close aligned with the Expo baseline hard stop:
+// 50% margin loss at 20x = 2.5% price move.
 // Runs every 2 minutes (less aggressive than main trail cycle).
 
-const ORPHAN_LOSS_THRESHOLD = 0.25; // auto-close at -25% capital loss
+const ORPHAN_LOSS_THRESHOLD = 0.50; // auto-close at -50% capital loss
 const ORPHAN_CHECK_INTERVAL = 2 * 60 * 1000; // every 2 minutes
 
 async function runOrphanGuard() {
@@ -577,7 +578,7 @@ async function runOrphanGuard() {
 
 log('Trail watchdog started — 15s interval | tier trail (100x:46%→45% / 75x:31%→30% / 50x:21%→20%)');
 log('Safety trail (fee-aware): 125x→lock≈21% / 75x→lock≈17% / 150x→lock≈24% / 200x→lock≈28% | nets +10% after fees');
-log('Orphan guard started — 2min interval | auto-close unmanaged positions > -25% capital');
+log('Orphan guard started — 2min interval | auto-close unmanaged positions > -50% capital');
 // Load tier config before first cycle so dynamic tables are ready
 loadTierConfig().then(() => {
   runTrailCycle();
