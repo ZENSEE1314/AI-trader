@@ -51,7 +51,7 @@ const TV_SYMBOLS   = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT
 const BYBIT_SYM    = { BTCUSDT: 'BTCUSDT', ETHUSDT: 'ETHUSDT', SOLUSDT: 'SOLUSDT' };
 const HISTORY_BARS = 300;
 const WINDOW_MS    = 120 * 60 * 1000;      // entry window once a fresh Expo HL/LH appears (8 × 15m)
-const FRESH_MS     = 90 * 60 * 1000;       // a label is actionable only if its pivot is < 90m old
+const FRESH_MS     = WINDOW_MS;            // Pine keeps HL/LH bias alive for piv_len + 3 bars
 const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
 const SCAN_MS      = 30_000;               // 1m entry scan cadence
 const LEVERAGE     = 20;
@@ -121,29 +121,38 @@ function watch15m(client, ind, tvTicker) {
 
       persistLabels(sym, labels, periods);   // keep the homepage backtest cache fresh
 
-      // Most recent readable HL/LH label (x != null = confirmed/positioned).
+      // Most recent readable structure label (x != null = confirmed/positioned).
+      // HH/LL must clear stale HL/LH bias, otherwise the 1m scanner can trade
+      // from an old HL/LH after the current 15m chart has already moved on.
       let newest = null;
       for (const l of labels) {
         if (l.x == null) continue;
-        if (l.text !== 'HL' && l.text !== 'LH') continue;
+        if (!/^(HH|HL|LH|LL)$/.test(l.text || '')) continue;
         const bar = periods[l.x];
         if (!bar) continue;
         const t = bar.time * 1000;
-        if (!newest || t > newest.time) newest = { time: t, dir: l.text === 'HL' ? 'LONG' : 'SHORT' };
+        if (!newest || t > newest.time) newest = {
+          time: t,
+          type: l.text,
+          dir: l.text === 'HL' ? 'LONG' : l.text === 'LH' ? 'SHORT' : null,
+        };
       }
       if (!newest) return;
       if (lastSeen[sym] === newest.time) return;   // already processed this label
       lastSeen[sym] = newest.time;
 
       const age = Date.now() - newest.time;
-      const lbl = newest.dir === 'LONG' ? 'HL' : 'LH';
       const at  = new Date(newest.time).toISOString().slice(0, 16);
-      if (age <= FRESH_MS) {
+      if (newest.dir && age <= FRESH_MS) {
         // Fresh structure just printed → open the entry window now.
         biasMap[sym] = { direction: newest.dir, labelTime: newest.time, openedAt: Date.now(), traded: false };
-        bLog(`[${sym}][15m] Expo ${lbl} @ ${at} (age ${Math.round(age / 60000)}m) → bias=${newest.dir} LIVE — window ${WINDOW_MS / 60000}m`);
+        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (age ${Math.round(age / 60000)}m) → bias=${newest.dir} LIVE — window ${WINDOW_MS / 60000}m`);
+      } else if (newest.dir) {
+        delete biasMap[sym];
+        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (age ${Math.round(age / 60000)}m) — stale, bias cleared`);
       } else {
-        bLog(`[${sym}][15m] Expo ${lbl} @ ${at} (age ${Math.round(age / 60000)}m) — stale on startup, ignored`);
+        delete biasMap[sym];
+        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (age ${Math.round(age / 60000)}m) — no HL/LH entry bias, bias cleared`);
       }
     } catch (e) { bLog(`[${sym}][15m] parse error: ${e.message}`); }
   });
