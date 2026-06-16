@@ -181,6 +181,8 @@ router.get('/help', (req, res) => {
 // bypasses the old internal gates — SMC Pro Suite already ran 6-factor
 // confluence analysis before firing, so no second-guessing needed.
 router.post('/smc-pro', (req, res) => {
+  return res.json({ ok: false, message: 'SMC Pro webhook disabled - only SMC Expo watcher may trade' });
+
   const { signal, symbol = 'BTCUSDT', price, secret } = req.body || {};
 
   // Normalise ticker — TradingView sends "BITUNIX:BTCUSDT.P"

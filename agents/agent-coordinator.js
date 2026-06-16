@@ -92,13 +92,12 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('vwap-pullback', this.vwapPullbackAgent);
 
     // ── STRIPPED DOWN per owner — keep only 4 roles, pause everything else ──
-    //   trader     — execute on all user APIs + trail SL/TP
+    //   trader     — execute SMC Expo signals on all user APIs + trail SL/TP
     //   accountant — record trade history, manage referral/account commissions
-    //   kronos     — token predictions
     //   (chart/signals come from the standalone Expo watcher → TraderAgent.execute())
     // The native ChartAgent and all AI/optimizer/coder/sentiment/polymarket/vwap noise
-    // is paused. The professional-mode gate also blocks any non-EXPO_BASELINE signal.
-    const KEEP_AGENTS = new Set(['trader', 'accountant', 'kronos']);
+    // is paused. TraderAgent/cycle.js hard-block any non-EXPO_BASELINE signal.
+    const KEEP_AGENTS = new Set(['trader', 'accountant']);
     for (const [name, agent] of this._agents) {
       if (!KEEP_AGENTS.has(name) && agent) {
         try { agent.paused = true; agent.disabled = true; } catch (_) {}
@@ -200,9 +199,9 @@ class AgentCoordinator extends BaseAgent {
       // No token agents (BTCAgent/ETHAgent = the OLD chart-signal pipeline), no
       // top-token fetch, no token-scan loop, no cross-agent strategy sharing, no
       // setCoordinator for paused agents (those start scan timers). The Expo watcher
-      // is the SOLE signal source → TraderAgent. Only trader/accountant/kronos run.
+      // is the SOLE signal source → TraderAgent. Only trader/accountant run.
       this._startCeoLoop();   // heartbeat + position management (no token signals)
-      this.log(`[BOOT] FULLY OPERATIONAL — Expo signal + trader/accountant/kronos only (${[...this._agents].filter(([,a])=>!a.paused).length} active agents).`);
+      this.log(`[BOOT] FULLY OPERATIONAL — SMC Expo signal + trader/accountant only (${[...this._agents].filter(([,a])=>!a.paused).length} active agents).`);
     } catch (criticalError) {
       this.logError(`[BOOT] CRITICAL INITIALIZATION FAILURE: ${criticalError.message}`);
       this.logError(criticalError.stack);

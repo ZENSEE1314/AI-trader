@@ -161,6 +161,12 @@ class TraderAgent extends BaseAgent {
 
       for (const pick of signals) {
         this.logTrade(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setupName}`);
+        if (pick.setup !== 'EXPO_BASELINE' || pick.source !== 'expo-watcher') {
+          this.logTrade(`EXPO-ONLY BLOCKED: ${pick.symbol} ${pick.direction} setup=${pick.setup || pick.setupName || 'unknown'} source=${pick.source || 'unknown'}`);
+          this.tradesSkipped++;
+          this.addActivity('skip', `${pick.symbol} blocked - SMC Expo only`);
+          continue;
+        }
         if (pick.marketDecision) {
           this.logTrade(`MarketDecision: ${pick.marketDecision.summary || 'approved'} | size=${(pick.sizeMod || 1).toFixed(2)}x ${pick.sizeReason || ''}`);
         }

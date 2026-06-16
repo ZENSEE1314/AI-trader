@@ -258,7 +258,7 @@ async function handleCommand(text, fromChatId) {
   } else if (cmd === '/polytest') {
     await sendPolyTest(fromChatId);
   } else if (cmd === '/polytrade') {
-    await forcePolyTrade(fromChatId);
+    await tgSendTo(fromChatId, `<b>Blocked:</b> Expo-only mode is active. Only SMC Expo crypto trades can execute.`);
   } else {
     await tgSendTo(fromChatId, `Unknown command: <code>${e(cmd)}</code>\nSend /help for all commands.`);
   }

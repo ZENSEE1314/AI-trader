@@ -1817,6 +1817,11 @@ async function executeForAllUsers(pick) {
     return;
   }
 
+  if (pick?.setup !== 'EXPO_BASELINE' || pick?.source !== 'expo-watcher') {
+    bLog.trade(`EXPO-ONLY BLOCKED: ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
+    return 'EXPO_ONLY_BLOCKED';
+  }
+
   try {
     // NOTE: Auto-pause for payment overdue was removed — it silently blocked users who registered
     // more than 7 days ago. Payment enforcement is handled explicitly via the admin panel.
