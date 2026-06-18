@@ -67,6 +67,12 @@ const _widened = new Set();
 // V2 thresholds live in strategy-v2.js (V2_SL_CAPITAL_PCT / TRAIL_START / TRAIL_STEP).
 // Funding rate cache kept for getLivePrice fallback only.
 const FUNDING_FALLBACK = 0.0001;
+const EXPO_TP1_CAPITAL = 0.35;
+const EXPO_TP2_CAPITAL = 0.70;
+
+function isExpoSetup(setup) {
+  return String(setup || '').startsWith('EXPO_BASELINE');
+}
 
 // Cache funding rates to avoid hammering Binance every 15s
 const fundingRateCache = new Map(); // symbol → { rate, fetchedAt }
@@ -163,6 +169,81 @@ async function updateSlBitunix(client, symbol, newSlPrice, pricePrec, existingTp
   }
 }
 
+async function manageExpoTpBitunix(client, dbTrade, pos, symbol, isLong, qty, entry, price, pricePrec, capitalPct, leverage) {
+  const posId = pos.positionId || pos.id;
+  const tp1Hit = dbTrade.smc_tp1_hit === true || dbTrade.smc_tp1_hit === 't';
+  try {
+    if (tp1Hit && capitalPct >= EXPO_TP2_CAPITAL) {
+      if (posId && typeof client.flashClose === 'function') {
+        await client.flashClose({ positionId: posId });
+      } else {
+        await client.placeOrder({
+          symbol,
+          side: isLong ? 'SELL' : 'BUY',
+          orderType: 'MARKET',
+          tradeSide: 'CLOSE',
+          qty: String(Math.abs(qty)),
+          positionId: posId,
+          reduceOnly: true,
+        });
+      }
+      await db.query(
+        `UPDATE trades
+         SET status = 'CLOSED', exit_reason = 'expo_tp70',
+             exit_price = $1, closed_at = NOW()
+         WHERE id = $2 AND status = 'OPEN'`,
+        [price, dbTrade.id]
+      );
+      log(`✓ ${symbol} EXPO TP2 full close sent @ $${price} (+${(capitalPct * 100).toFixed(2)}% capital)`);
+      await notify(
+        `Expo TP2 Hit\n` +
+        `${symbol} ${isLong ? 'LONG' : 'SHORT'} runner closed @ $${price}\n` +
+        `Profit: +${(capitalPct * 100).toFixed(1)}% capital`
+      );
+      return true;
+    }
+
+    if (!tp1Hit && capitalPct >= EXPO_TP1_CAPITAL) {
+      const closeQty = Math.floor(Math.abs(qty) * 0.5 * 1e8) / 1e8;
+      if (closeQty > 0) {
+        await client.placeOrder({
+          symbol,
+          side: isLong ? 'SELL' : 'BUY',
+          orderType: 'MARKET',
+          tradeSide: 'CLOSE',
+          qty: String(closeQty),
+          positionId: posId,
+          reduceOnly: true,
+        });
+      }
+      const lockPricePct = EXPO_TP1_CAPITAL / leverage;
+      const lockSl = isLong
+        ? entry * (1 + lockPricePct)
+        : entry * (1 - lockPricePct);
+      await updateSlBitunix(client, symbol, lockSl, pricePrec, null, pos);
+      await db.query(
+        `UPDATE trades
+         SET smc_tp1_hit = true, trailing_sl_price = $1, sl_price = $1,
+             trailing_sl_last_step = $2
+         WHERE id = $3 AND status = 'OPEN'`,
+        [parseFloat(lockSl.toFixed(pricePrec)), EXPO_TP1_CAPITAL, dbTrade.id]
+      );
+      log(`✓ ${symbol} EXPO TP1 50% close sent @ $${price} (+${(capitalPct * 100).toFixed(2)}% capital)`);
+      await notify(
+        `Expo TP1 Hit\n` +
+        `${symbol} ${isLong ? 'LONG' : 'SHORT'} 50% closed @ $${price}\n` +
+        `SL locked at +35%, runner waits for +70%`
+      );
+      return true;
+    }
+
+    return false;
+  } catch (e) {
+    log(`✗ ${symbol} EXPO TP management failed: ${e.message}`);
+    return false;
+  }
+}
+
 async function updateSlBinance(client, symbol, newSlPrice, isLong, pricePrec) {
   try {
     const openOrders = await client.getAllOpenOrders({ symbol });
@@ -206,8 +287,9 @@ async function runTrailCycle() {
     // DB is NOT the source of truth for which positions exist —
     // the exchange is. DB only tells us the last SL we set.
     const dbTrades = await db.query(`
-      SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price,
-             t.trailing_sl_price, t.tp_price, t.leverage, t.api_key_id, t.setup
+      SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price, t.quantity,
+             t.trailing_sl_price, t.tp_price, t.leverage, t.api_key_id, t.setup,
+             t.smc_tp1_hit
       FROM trades t
       WHERE t.status = 'OPEN'
     `);
@@ -322,6 +404,11 @@ async function runTrailCycle() {
           const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
           log(`[DIAG] ${key.email || key.id} | ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} live=$${livePrice} | lev=${leverage}x | capital=${pctDisplay} | curSL=$${currentSl.toFixed(pricePrec)} | exchSL=$${liveExchangeSl > 0 ? liveExchangeSl.toFixed(pricePrec) : 'N/A'} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
 
+          if (isExpoSetup(dbTrade?.setup) && capitalPct >= EXPO_TP1_CAPITAL) {
+            await manageExpoTpBitunix(posClient, dbTrade, pos, symbol, isLong, qty, entry, livePrice, pricePrec, capitalPct, leverage);
+            continue;
+          }
+
           // ── Retro-adjust SL to 20% capital ────────────────
           // If a losing position's SL is tighter than 20% capital loss,
           // widen it to give the trade room to recover.
@@ -360,7 +447,7 @@ async function runTrailCycle() {
             : isLong  ? Math.max(0, (currentSl / entry - 1) * leverage)
                       : Math.max(0, (1 - currentSl / entry) * leverage);
 
-          const trailResult = dbTrade?.setup === 'EXPO_BASELINE'
+          const trailResult = isExpoSetup(dbTrade?.setup)
             ? calculateExpoTrail(entry, livePrice, isLong, lastStep, leverage)   // no lock until TP1 (+35%), then +15/+10
             : calculateTrailingStep(entry, livePrice, isLong, lastStep, leverage);
           if (!trailResult) {
@@ -441,11 +528,69 @@ async function runTrailCycle() {
         const profitPct  = isLong ? (curPrice - entryPrice) / entryPrice : (entryPrice - curPrice) / entryPrice;
         const capitalPct = profitPct * leverage;
 
+        if (isExpoSetup(trade.setup) && capitalPct >= EXPO_TP1_CAPITAL) {
+          try {
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+            const tp1Hit = trade.smc_tp1_hit === true || trade.smc_tp1_hit === 't';
+            const positions = await client.getPositions({ symbol: trade.symbol }).catch(() => []);
+            const openPos = (Array.isArray(positions) ? positions : [])
+              .find(p => Math.abs(parseFloat(p.positionAmt || 0)) > 0);
+            const liveQty = Math.abs(parseFloat(openPos?.positionAmt || 0));
+
+            if (tp1Hit && capitalPct >= EXPO_TP2_CAPITAL && liveQty > 0) {
+              await client.submitNewOrder({
+                symbol: trade.symbol,
+                side: isLong ? 'SELL' : 'BUY',
+                type: 'MARKET',
+                quantity: liveQty,
+                reduceOnly: true,
+              });
+              await db.query(
+                `UPDATE trades
+                 SET status = 'CLOSED', exit_reason = 'expo_tp70',
+                     exit_price = $1, closed_at = NOW()
+                 WHERE id = $2 AND status = 'OPEN'`,
+                [curPrice, trade.id]
+              );
+              log(`✓ ${trade.symbol} (Binance) EXPO TP2 close sent @ $${curPrice} (+${(capitalPct * 100).toFixed(2)}% capital)`);
+              await notify(`Expo TP2 Hit\n${trade.symbol} runner closed @ $${curPrice}`);
+            } else if (!tp1Hit) {
+              const closeQty = Math.floor(((parseFloat(trade.quantity) || liveQty) * 0.5) * 1e8) / 1e8;
+              if (closeQty > 0) {
+                await client.submitNewOrder({
+                  symbol: trade.symbol,
+                  side: isLong ? 'SELL' : 'BUY',
+                  type: 'MARKET',
+                  quantity: closeQty,
+                  reduceOnly: true,
+                });
+              }
+              const lockPricePct = EXPO_TP1_CAPITAL / leverage;
+              const lockSl = isLong
+                ? entryPrice * (1 + lockPricePct)
+                : entryPrice * (1 - lockPricePct);
+              await updateSlBinance(client, trade.symbol, lockSl, isLong, pricePrec);
+              await db.query(
+                `UPDATE trades
+                 SET smc_tp1_hit = true, trailing_sl_price = $1,
+                     trailing_sl_last_step = $2
+                 WHERE id = $3 AND status = 'OPEN'`,
+                [parseFloat(lockSl.toFixed(pricePrec)), EXPO_TP1_CAPITAL, trade.id]
+              );
+              log(`✓ ${trade.symbol} (Binance) EXPO TP1 50% close sent @ $${curPrice} (+${(capitalPct * 100).toFixed(2)}% capital)`);
+              await notify(`Expo TP1 Hit\n${trade.symbol} 50% closed @ $${curPrice}\nRunner waits for +70%`);
+            }
+          } catch (e) {
+            log(`Binance EXPO TP management error ${trade.symbol}: ${e.message}`);
+          }
+          continue;
+        }
+
         const lastStep = currentSl === 0 ? 0
           : isLong  ? Math.max(0, (currentSl / entryPrice - 1) * leverage)
                     : Math.max(0, (1 - currentSl / entryPrice) * leverage);
 
-        const trailResult = trade.setup === 'EXPO_BASELINE'
+        const trailResult = isExpoSetup(trade.setup)
           ? calculateExpoTrail(entryPrice, curPrice, isLong, lastStep, leverage)   // no lock until TP1 (+35%), then +15/+10
           : calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, leverage);
         if (!trailResult) continue;

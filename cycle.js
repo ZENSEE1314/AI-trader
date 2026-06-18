@@ -38,6 +38,10 @@ let _onTradeOutcome = null;
 function onTradeOutcome(fn) { _onTradeOutcome = fn; }
 function fireTradeOutcome(data) { if (_onTradeOutcome) { try { _onTradeOutcome(data); } catch (_) {} } }
 
+function isExpoSetup(setup) {
+  return String(setup || '').startsWith('EXPO_BASELINE');
+}
+
 // ── ADX helper ─────────────────────────────────────────────
 function calcADX(highs, lows, closes, period = 14) {
   if (highs.length < period + 1) return { adx: 0, diPlus: 0, diMinus: 0 };
@@ -1174,7 +1178,7 @@ async function checkTrailingStop(client) {
         const lev      = state.leverage || 20;
         const lastStep = state.trailingSlLastStep || 0;
         // EXPO_BASELINE: custom trail — no lock until TP1 (+35%), then +15/+10 tiers.
-        const step = state.setup === 'EXPO_BASELINE'
+        const step = isExpoSetup(state.setup)
           ? calculateExpoTrail(state.entry, cur, state.isLong, lastStep, lev)
           : calculateTrailingStep(state.entry, cur, state.isLong, lastStep, lev);
         if (step && step.newSlPrice) {
@@ -3129,9 +3133,9 @@ async function syncTradeStatus() {
 
               // ── SMC TP1-hit (Binance): close 50%, lock SL at TP1, ride runner to TP2 ──
               // EXPO_BASELINE has no stored tp_price — derive TP1 (+35%) / runner (+500%) from entry.
-              const isExpoBn = trade.setup === 'EXPO_BASELINE';
+              const isExpoBn = isExpoSetup(trade.setup);
               const bnSmcTp1 = isExpoBn ? (isLong ? entryPrice * (1 + 0.35 / tradeLev) : entryPrice * (1 - 0.35 / tradeLev)) : (parseFloat(trade.tp_price)  || 0);
-              const bnSmcTp2 = isExpoBn ? (isLong ? entryPrice * (1 + 5.00 / tradeLev) : entryPrice * (1 - 5.00 / tradeLev)) : (parseFloat(trade.tp2_price) || 0);
+              const bnSmcTp2 = isExpoBn ? (isLong ? entryPrice * (1 + 0.70 / tradeLev) : entryPrice * (1 - 0.70 / tradeLev)) : (parseFloat(trade.tp2_price) || 0);
               const bnTp1Hit = trade.smc_tp1_hit === true || trade.smc_tp1_hit === 't';
 
               if (bnSmcTp1 > 0 && bnSmcTp2 > 0 && !bnTp1Hit) {
@@ -3205,7 +3209,7 @@ async function syncTradeStatus() {
               // ── Candle-low trail: move SL to last completed 15m candle low/high ──
               let binNewSl = null;
               let binSlSource = '';
-              if (trade.setup === 'EXPO_BASELINE') {
+              if (isExpoSetup(trade.setup)) {
                 // Custom Expo trail: no lock until TP1 (+35%), then +15/+10 tiers.
                 const er = calculateExpoTrail(entryPrice, curPrice, isLong, lastStep, tradeLev);
                 if (er) { binNewSl = er.newSlPrice; binSlSource = 'expo'; }
@@ -3459,9 +3463,9 @@ async function syncTradeStatus() {
               // At  75x: TP1 = +0.80% price (+60% cap), TP2 = +1.33% price (+100% cap).
               // EXPO_BASELINE: close 50% at TP1 +35%, lock SL at +35% (then calculateExpoTrail
               // rides the runner +15/+10). Other setups keep the +60% scale-out.
-              const isExpoTp1   = trade.setup === 'EXPO_BASELINE';
+              const isExpoTp1   = isExpoSetup(trade.setup);
               const TP1_CAPITAL = isExpoTp1 ? 0.35 : 0.60;
-              const TP2_CAPITAL = 1.00; // +100% capital
+              const TP2_CAPITAL = isExpoTp1 ? 0.70 : 1.00; // Expo runner closes at +70% capital
               const SL_AT_TP1   = isExpoTp1 ? 0.35 : 0.45;
 
               const tp1AlreadyHit = trade.smc_tp1_hit === true || trade.smc_tp1_hit === 't';
