@@ -23,6 +23,50 @@ const path = require('path');
 
 const bLog = (...a) => console.log('[Expo-Watcher]', ...a);
 
+const pHigh = p => p.high ?? p.max;
+const pLow = p => p.low ?? p.min;
+
+function asc(periods) {
+  return periods && periods.length ? [...periods].reverse() : [];
+}
+
+function computeVwapBands(bars) {
+  const v2u = new Array(bars.length).fill(null);
+  const v2d = new Array(bars.length).fill(null);
+  let day = null, tpv = 0, vol = 0, tpv2 = 0;
+  for (let i = 0; i < bars.length; i++) {
+    const p = bars[i];
+    const t = (p.time != null ? p.time : p[0]) * 1000;
+    const d = Math.floor(t / 86400000);
+    if (d !== day) { day = d; tpv = 0; vol = 0; tpv2 = 0; }
+    const high = pHigh(p), low = pLow(p), close = p.close;
+    const volume = p.volume || 0;
+    if (high == null || low == null || close == null) continue;
+    const tp = (high + low + close) / 3;
+    tpv += tp * volume; vol += volume; tpv2 += tp * tp * volume;
+    if (vol > 0) {
+      const vw = tpv / vol;
+      const variance = tpv2 / vol - vw * vw;
+      const sd = variance > 0 ? Math.sqrt(variance) : 0;
+      v2u[i] = vw + 2 * sd;
+      v2d[i] = vw - 2 * sd;
+    }
+  }
+  return { v2u, v2d };
+}
+
+function expoPivotAtOuterVwap(periodsNewestFirst, labelX, direction) {
+  const bars = asc(periodsNewestFirst);
+  const idx = bars.length - 1 - labelX;
+  if (idx < 0 || idx >= bars.length) return { pass: false, reason: 'missing pivot bar' };
+  const bar = bars[idx];
+  const { v2u, v2d } = computeVwapBands(bars);
+  const upper = v2u[idx], lower = v2d[idx];
+  if (upper == null || lower == null) return { pass: false, reason: 'missing VWAP band' };
+  const pass = direction === 'SHORT' ? pHigh(bar) >= upper : pLow(bar) <= lower;
+  return { pass, reason: pass ? 'outer VWAP' : 'inside VWAP bands' };
+}
+
 // ── Persist Expo HH/HL/LH/LL labels to the cache the homepage backtester reads ──
 // Reuses this watcher's existing TV connection (no extra connections). Throttled.
 const LABELS_DIR = path.join(__dirname, '..', 'data', 'expo-labels');
@@ -186,6 +230,7 @@ function watch15m(client, ind, tvTicker) {
         if (!bar) continue;
         const t = bar.time * 1000;
         if (!newest || t > newest.time) newest = {
+          x: l.x,
           time: t,
           type: l.text,
           dir: l.text === 'HL' ? 'LONG' : l.text === 'LH' ? 'SHORT' : null,
@@ -198,6 +243,12 @@ function watch15m(client, ind, tvTicker) {
       const age = Date.now() - newest.time;
       const at  = new Date(newest.time).toISOString().slice(0, 16);
       if (newest.dir && age <= FRESH_MS) {
+        const vwap = expoPivotAtOuterVwap(periods, newest.x, newest.dir);
+        if (!vwap.pass) {
+          delete biasMap[sym];
+          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${vwap.reason}; ${newest.dir} requires outer VWAP band`);
+          return;
+        }
         // Fresh structure just printed → open the entry window now.
         biasMap[sym] = { direction: newest.dir, labelTime: newest.time, openedAt: Date.now(), traded: false };
         bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (age ${Math.round(age / 60000)}m) → bias=${newest.dir} LIVE — window ${WINDOW_MS / 60000}m`);
