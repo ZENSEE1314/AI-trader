@@ -20,6 +20,7 @@ const TradingView = require('@mathieuc/tradingview');
 const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
+const { checkTimefmDirection } = require('./timefm-gate');
 
 const bLog = (...a) => console.log('[Expo-Watcher]', ...a);
 
@@ -293,7 +294,7 @@ async function scanEntries() {
     if (!sessionOpen) continue;   // outside London/NY hours — no entries
     if (!canTrade(sym, b.direction)) continue;
     try {
-      const c1m = await fetch1m(BYBIT_SYM[sym], 40);
+      const c1m = await fetch1m(BYBIT_SYM[sym], 240);
       const entry = detectEntry(c1m, b.direction);
       if (entry?.blocked) {
         bLog(`[${sym}][1m] ${b.direction} blocked — ${entry.reason}`);
@@ -304,6 +305,14 @@ async function scanEntries() {
 
       const price = c1m[c1m.length - 1].close;
       const isLong = dir === 'LONG';
+      const timefm = await checkTimefmDirection({ symbol: sym, direction: dir, candles: c1m });
+      const timefmMove = Number.isFinite(timefm.moveBps) ? ` (${timefm.moveBps.toFixed(1)} bps)` : '';
+      if (!timefm.pass) {
+        bLog(`[${sym}][1m] ${dir} blocked by TimeFM: ${timefm.reason}${timefmMove}`);
+        continue;
+      }
+      bLog(`[${sym}][1m] TimeFM confirmed ${dir}: ${timefm.reason}${timefmMove}`);
+
       markTraded(sym, dir);
       biasMap[sym].traded = true;   // one trade per bias window
 
