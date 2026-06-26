@@ -95,9 +95,9 @@ const EXPO_ID      = 'PUB;26ae10374a9d4b0591b5b51a41356e57';   // Smart Money Co
 const TV_SYMBOLS   = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT.P'];
 const BYBIT_SYM    = { BTCUSDT: 'BTCUSDT', ETHUSDT: 'ETHUSDT', SOLUSDT: 'SOLUSDT' };
 const HISTORY_BARS = 300;
-const ENTRY_CONFIRM_MS = 5 * 60 * 1000;    // if no 1m structure appears in 5 candles, miss it
+const ENTRY_CONFIRM_MS = 10 * 60 * 1000;   // if no 1m structure appears in 10 candles, miss it
 const WINDOW_MS    = ENTRY_CONFIRM_MS;     // entry window once a fresh Expo HL/LH appears
-const FRESH_MS     = ENTRY_CONFIRM_MS;     // reject old 15m labels after startup/reconnect
+const FRESH_MS     = 5 * 60 * 1000;        // reject old 15m labels after startup/reconnect
 const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
 const SCAN_MS      = 30_000;               // 1m entry scan cadence
 const LEVERAGE     = 20;
@@ -179,17 +179,9 @@ function rangePosition(c1m) {
 function detectEntry(c1m, bias) {
   if (c1m.length < 3) return null;
   const n = c1m.length, prev = c1m[n - 2], pre = c1m[n - 3], curr = c1m[n - 1];
-  const structure = recent1mStructure(c1m);
-  const price = curr.close;
   const pos = rangePosition(c1m);
-  if (bias === 'SHORT' && structure.lastLow && isNearLevel(price, structure.lastLow.price, 0.0025)) {
-    return { blocked: true, reason: `near 1m support ${structure.lastLow.price}` };
-  }
   if (bias === 'SHORT' && pos <= 0.35) {
     return { blocked: true, reason: `in lower 1m range (${Math.round(pos * 100)}%)` };
-  }
-  if (bias === 'LONG' && structure.lastHigh && isNearLevel(price, structure.lastHigh.price, 0.0025)) {
-    return { blocked: true, reason: `near 1m resistance ${structure.lastHigh.price}` };
   }
   if (bias === 'LONG' && pos >= 0.65) {
     return { blocked: true, reason: `in upper 1m range (${Math.round(pos * 100)}%)` };
@@ -286,7 +278,7 @@ async function scanEntries() {
     const rawBias = biasMap[sym];
     if (rawBias && !rawBias.traded && Date.now() - rawBias.openedAt > ENTRY_CONFIRM_MS) {
       rawBias.traded = true;
-      bLog(`[${sym}][1m] ${rawBias.direction} missed — no 1m structure within 5 candles`);
+      bLog(`[${sym}][1m] ${rawBias.direction} missed - no 1m structure within 10 candles`);
       continue;
     }
     const b = biasAlive(sym);

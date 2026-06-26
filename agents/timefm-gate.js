@@ -6,7 +6,7 @@ const DEFAULT_HORIZON = Number(process.env.TIMEFM_HORIZON || 5);
 const DEFAULT_MIN_MOVE_BPS = Number(process.env.TIMEFM_MIN_MOVE_BPS || 4);
 
 function isEnabled() {
-  return (process.env.TIMEFM_GATE_ENABLED || '1') !== '0';
+  return (process.env.TIMEFM_GATE_ENABLED || '0') !== '0';
 }
 
 function endpointUrl() {
