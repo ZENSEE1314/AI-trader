@@ -1622,18 +1622,22 @@ async function main() {
       // ── Signal-type loss blocker ───────────────────────────────
       // If the same pivot+direction combo has lost ≥ 2 times, block it for 24h.
       // Prevents the bot from repeating the exact same losing pattern.
-      try {
-        const liveGate = await aiLearner.shouldBlockLiveTrade({
-          symbol: pick.symbol || pick.sym,
-          direction: pick.direction,
-          setup: setupName || pick.setup || 'unknown',
-        });
-        if (liveGate.block) {
-          bLog.trade(`LIVE-HISTORY BLOCKED: ${liveGate.reason}`);
-          continue;
+      const liveHistorySetup = setupName || pick.setup || 'unknown';
+      const skipLiveHistoryGate = String(liveHistorySetup || '').startsWith('EXPO_BASELINE');
+      if (!skipLiveHistoryGate) {
+        try {
+          const liveGate = await aiLearner.shouldBlockLiveTrade({
+            symbol: pick.symbol || pick.sym,
+            direction: pick.direction,
+            setup: liveHistorySetup,
+          });
+          if (liveGate.block) {
+            bLog.trade(`LIVE-HISTORY BLOCKED: ${liveGate.reason}`);
+            continue;
+          }
+        } catch (histErr) {
+          bLog.error(`Live-history gate error: ${histErr.message} - allowing signal`);
         }
-      } catch (histErr) {
-        bLog.error(`Live-history gate error: ${histErr.message} - allowing signal`);
       }
 
       const sigPivot  = pick.type || pick.pivot || pick.setup || 'unknown';

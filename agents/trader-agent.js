@@ -234,20 +234,24 @@ class TraderAgent extends BaseAgent {
           continue;
         }
 
-        try {
-          const liveGate = await aiLearner.shouldBlockLiveTrade({
-            symbol: pick.symbol || pick.sym,
-            direction: pick.direction,
-            setup: pick.setupName || pick.setup || 'unknown',
-          });
-          if (liveGate.block) {
-            this.logTrade(`LIVE-HISTORY BLOCKED: ${liveGate.reason}`);
-            this.tradesSkipped++;
-            this.addActivity('skip', `${pick.symbol} live history losing - skipped`);
-            continue;
+        const liveHistorySetup = pick.setupName || pick.setup || 'unknown';
+        const skipLiveHistoryGate = String(liveHistorySetup || '').startsWith('EXPO_BASELINE');
+        if (!skipLiveHistoryGate) {
+          try {
+            const liveGate = await aiLearner.shouldBlockLiveTrade({
+              symbol: pick.symbol || pick.sym,
+              direction: pick.direction,
+              setup: liveHistorySetup,
+            });
+            if (liveGate.block) {
+              this.logTrade(`LIVE-HISTORY BLOCKED: ${liveGate.reason}`);
+              this.tradesSkipped++;
+              this.addActivity('skip', `${pick.symbol} live history losing - skipped`);
+              continue;
+            }
+          } catch (histErr) {
+            this.logTrade(`Live-history gate error: ${histErr.message} - allowing signal`);
           }
-        } catch (histErr) {
-          this.logTrade(`Live-history gate error: ${histErr.message} - allowing signal`);
         }
 
         // Backtest gate DISABLED per user direction (PR #78 disabled it in
