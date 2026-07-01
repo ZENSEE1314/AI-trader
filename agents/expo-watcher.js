@@ -179,13 +179,6 @@ function rangePosition(c1m) {
 function detectEntry(c1m, bias) {
   if (c1m.length < 3) return null;
   const n = c1m.length, prev = c1m[n - 2], pre = c1m[n - 3], curr = c1m[n - 1];
-  const pos = rangePosition(c1m);
-  if (bias === 'SHORT' && pos <= 0.35) {
-    return { blocked: true, reason: `in lower 1m range (${Math.round(pos * 100)}%)` };
-  }
-  if (bias === 'LONG' && pos >= 0.65) {
-    return { blocked: true, reason: `in upper 1m range (${Math.round(pos * 100)}%)` };
-  }
   if (bias === 'LONG'  && prev.low  < pre.low  && prev.low  < curr.low)  return 'LONG';
   if (bias === 'SHORT' && prev.high > pre.high && prev.high > curr.high) return 'SHORT';
   return null;
