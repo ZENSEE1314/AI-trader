@@ -34,6 +34,7 @@ function asc(periods) {
 function computeVwapBands(bars) {
   const v2u = new Array(bars.length).fill(null);
   const v2d = new Array(bars.length).fill(null);
+  const mid = new Array(bars.length).fill(null);
   let day = null, tpv = 0, vol = 0, tpv2 = 0;
   for (let i = 0; i < bars.length; i++) {
     const p = bars[i];
@@ -49,11 +50,12 @@ function computeVwapBands(bars) {
       const vw = tpv / vol;
       const variance = tpv2 / vol - vw * vw;
       const sd = variance > 0 ? Math.sqrt(variance) : 0;
+      mid[i] = vw;
       v2u[i] = vw + 2 * sd;
       v2d[i] = vw - 2 * sd;
     }
   }
-  return { v2u, v2d };
+  return { v2u, v2d, mid };
 }
 
 function expoPivotAtOuterVwap(periodsNewestFirst, labelX, direction) {
@@ -61,11 +63,25 @@ function expoPivotAtOuterVwap(periodsNewestFirst, labelX, direction) {
   const idx = bars.length - 1 - labelX;
   if (idx < 0 || idx >= bars.length) return { pass: false, reason: 'missing pivot bar' };
   const bar = bars[idx];
-  const { v2u, v2d } = computeVwapBands(bars);
-  const upper = v2u[idx], lower = v2d[idx];
-  if (upper == null || lower == null) return { pass: false, reason: 'missing VWAP band' };
-  const pass = direction === 'SHORT' ? pHigh(bar) >= upper : pLow(bar) <= lower;
-  return { pass, reason: pass ? 'outer VWAP' : 'inside VWAP bands' };
+  const { v2u, v2d, mid } = computeVwapBands(bars);
+  const upper = v2u[idx], lower = v2d[idx], vw = mid[idx];
+  if (upper == null || lower == null || vw == null) return { pass: false, reason: 'missing VWAP band' };
+
+  // 15m trend filter:
+  // - HL long is valid in the upper VWAP half / above VWAP mid.
+  // - LH short is valid in the lower VWAP half / below VWAP mid.
+  // 1m may be inside VWAP/range; only this 15m context decides trend alignment.
+  const high = pHigh(bar), low = pLow(bar), close = bar.close;
+  const pivotRef = direction === 'SHORT'
+    ? Math.min(close ?? high, high ?? close)
+    : Math.max(close ?? low, low ?? close);
+  const pass = direction === 'SHORT' ? pivotRef <= vw : pivotRef >= vw;
+  return {
+    pass,
+    reason: pass
+      ? (direction === 'SHORT' ? '15m lower VWAP half' : '15m upper VWAP half')
+      : (direction === 'SHORT' ? '15m upper VWAP half' : '15m lower VWAP half'),
+  };
 }
 
 // ── Persist Expo HH/HL/LH/LL labels to the cache the homepage backtester reads ──
@@ -232,7 +248,7 @@ function watch15m(client, ind, tvTicker) {
         const vwap = expoPivotAtOuterVwap(periods, newest.x, newest.dir);
         if (!vwap.pass) {
           delete biasMap[sym];
-          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${vwap.reason}; ${newest.dir} requires outer VWAP band`);
+          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${vwap.reason}; ${newest.dir} requires 15m VWAP trend alignment`);
           return;
         }
         // Fresh structure just printed → open the entry window now.
