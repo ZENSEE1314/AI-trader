@@ -129,9 +129,6 @@ let   _client = null;
 let   _expoInd = null;
 let   _scanTimer = null;
 
-// Trade only London/NY hours. Asia session is blocked.
-// Allowed: 07:00-21:00 UTC (14:00-04:00 Jakarta).
-function inTradingSession() { const h = new Date().getUTCHours(); return h >= 7 && h < 21; }
 function canTrade(sym, dir)   { return Date.now() - (cooldowns.get(`${sym}:${dir}`) || 0) > COOLDOWN_MS; }
 function markTraded(sym, dir) { cooldowns.set(`${sym}:${dir}`, Date.now()); }
 function normSym(tv)          { return tv.replace(/.*:/, '').replace(/[^A-Z]/g, '').replace('USDTP', 'USDT'); }
@@ -281,7 +278,6 @@ function connectAll(ind) {
 
 // ── 1m entry scan loop (native Bybit) ────────────────────────────
 async function scanEntries() {
-  const sessionOpen = inTradingSession();
   for (const tvTicker of TV_SYMBOLS) {
     const sym = normSym(tvTicker);
     const rawBias = biasMap[sym];
@@ -292,7 +288,6 @@ async function scanEntries() {
     }
     const b = biasAlive(sym);
     if (!b) continue;
-    if (!sessionOpen) continue;   // outside London/NY hours — no entries
     if (!canTrade(sym, b.direction)) continue;
     try {
       const c1m = await fetch1m(BYBIT_SYM[sym], 240);
