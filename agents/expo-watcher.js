@@ -116,6 +116,8 @@ const WINDOW_MS    = ENTRY_CONFIRM_MS;     // entry window once a fresh Expo HL/
 const FRESH_MS     = 5 * 60 * 1000;        // reject old 15m labels after startup/reconnect
 const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
 const SCAN_MS      = 30_000;               // 1m entry scan cadence
+const HEARTBEAT_MS = 5 * 60 * 1000;        // explain silent/no-trade periods
+const STALE_TV_MS  = 12 * 60 * 1000;       // reconnect if TradingView study stops updating
 const LEVERAGE     = 20;
 const SL_MARGIN    = 0.50;                 // hard SL −50% of margin
 const TP_MARGIN    = 0.35;                 // hard TP +35% of margin
@@ -125,9 +127,12 @@ const BYBIT_URL    = 'https://api.bybit.com/v5/market/kline';
 const biasMap   = {};   // sym → { direction, labelTime, openedAt, traded }
 const lastSeen  = {};   // sym → labelTime of the most recently processed Expo label
 const cooldowns = new Map();
+const watchState = {}; // sym -> latest observed 15m Expo study state
 let   _client = null;
 let   _expoInd = null;
 let   _scanTimer = null;
+let   _heartbeatTimer = null;
+let   _watchdogTimer = null;
 
 function canTrade(sym, dir)   { return Date.now() - (cooldowns.get(`${sym}:${dir}`) || 0) > COOLDOWN_MS; }
 function markTraded(sym, dir) { cooldowns.set(`${sym}:${dir}`, Date.now()); }
@@ -174,18 +179,6 @@ function recent1mStructure(c1m) {
     lastLowType: lastLow && prevLow ? (lastLow.price > prevLow.price ? 'HL' : 'LL') : null,
     lastHighType: lastHigh && prevHigh ? (lastHigh.price < prevHigh.price ? 'LH' : 'HH') : null,
   };
-}
-
-function isNearLevel(price, level, pct = 0.0015) {
-  return level && Math.abs(price - level) / level <= pct;
-}
-
-function rangePosition(c1m) {
-  const high = Math.max(...c1m.map(c => c.high));
-  const low = Math.min(...c1m.map(c => c.low));
-  const close = c1m[c1m.length - 1].close;
-  const span = high - low;
-  return span > 0 ? (close - low) / span : 0.5;
 }
 
 // 1m swing pullback: prev candle is a local low (long) / high (short). Enter on current bar.
@@ -235,7 +228,11 @@ function watch15m(client, ind, tvTicker) {
           dir: l.text === 'HL' ? 'LONG' : l.text === 'LH' ? 'SHORT' : null,
         };
       }
-      if (!newest) return;
+      if (!newest) {
+        watchState[sym] = { updatedAt: Date.now(), latestType: 'none', latestTime: null, labelCount: labels.length, periodCount: periods.length };
+        return;
+      }
+      watchState[sym] = { updatedAt: Date.now(), latestType: newest.type, latestTime: newest.time, labelCount: labels.length, periodCount: periods.length };
       if (lastSeen[sym] === newest.time) return;   // already processed this label
       lastSeen[sym] = newest.time;
 
@@ -262,6 +259,37 @@ function watch15m(client, ind, tvTicker) {
   });
 }
 
+function startDiagnostics(ind) {
+  if (_heartbeatTimer) clearInterval(_heartbeatTimer);
+  if (_watchdogTimer) clearInterval(_watchdogTimer);
+
+  _heartbeatTimer = setInterval(() => {
+    const now = Date.now();
+    for (const tv of TV_SYMBOLS) {
+      const sym = normSym(tv);
+      const st = watchState[sym];
+      const bias = biasMap[sym];
+      if (!st) {
+        bLog(`[${sym}][15m] heartbeat: no Expo study update received yet`);
+        continue;
+      }
+      const latestAt = st.latestTime ? new Date(st.latestTime).toISOString().slice(0, 16) : 'none';
+      const ageMin = st.latestTime ? Math.round((now - st.latestTime) / 60000) : 'n/a';
+      const updateAgeMin = Math.round((now - st.updatedAt) / 60000);
+      const biasText = bias && !bias.traded ? `${bias.direction} open ${Math.round((now - bias.openedAt) / 60000)}m` : 'none';
+      bLog(`[${sym}][15m] heartbeat: latest Expo ${st.latestType} @ ${latestAt} age=${ageMin}m, study update ${updateAgeMin}m ago, bias=${biasText}`);
+    }
+  }, HEARTBEAT_MS);
+
+  _watchdogTimer = setInterval(() => {
+    const now = Date.now();
+    const stale = TV_SYMBOLS.map(normSym).some(sym => !watchState[sym] || now - watchState[sym].updatedAt > STALE_TV_MS);
+    if (stale) {
+      bLog(`TradingView Expo stream stale > ${STALE_TV_MS / 60000}m - reconnecting`);
+      connectAll(ind);
+    }
+  }, 60_000);
+}
 function connectAll(ind) {
   if (_client) { try { _client.end(); } catch (_) {} }
   const client = new TradingView.Client({ token: process.env.TV_SESSION || '', signature: process.env.TV_SESSION_SIGN || '' });
@@ -364,6 +392,7 @@ async function start() {
   try { ind = await loadExpo(); }
   catch (e) { bLog(`Expo load failed: ${e.message} — retry 60s`); return void setTimeout(start, 60_000); }
   connectAll(ind);
+  startDiagnostics(ind);
   _scanTimer = setTimeout(scanEntries, 5000);
 }
 
