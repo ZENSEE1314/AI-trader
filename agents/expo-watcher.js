@@ -69,8 +69,8 @@ function expoPivotAtOuterVwap(periodsNewestFirst, labelX, direction) {
 
   // 15m context filter:
   // - HL long is valid above VWAP mid, or below the lower outer VWAP band.
-  // - HL long is blocked only when it is inside the lower VWAP half.
-  // - LH short remains valid below VWAP mid.
+  // - LH short is valid below VWAP mid, or above the upper outer VWAP band.
+  // - Inside the wrong VWAP half is blocked for both directions.
   // 1m may be inside VWAP/range; only this 15m context decides trend alignment.
   const high = pHigh(bar), low = pLow(bar), close = bar.close;
   const pivotRef = direction === 'SHORT'
@@ -78,14 +78,16 @@ function expoPivotAtOuterVwap(periodsNewestFirst, labelX, direction) {
     : Math.max(close ?? low, low ?? close);
   const longUpperHalf = pivotRef >= vw;
   const longLowerOuter = pivotRef <= lower;
-  const pass = direction === 'SHORT' ? pivotRef <= vw : (longUpperHalf || longLowerOuter);
+  const shortLowerHalf = pivotRef <= vw;
+  const shortUpperOuter = pivotRef >= upper;
+  const pass = direction === 'SHORT' ? (shortLowerHalf || shortUpperOuter) : (longUpperHalf || longLowerOuter);
   return {
     pass,
     reason: pass
       ? (direction === 'SHORT'
-        ? '15m lower VWAP half'
+        ? (shortUpperOuter ? '15m above upper outer VWAP band' : '15m lower VWAP half')
         : (longLowerOuter ? '15m below lower outer VWAP band' : '15m upper VWAP half'))
-      : (direction === 'SHORT' ? '15m upper VWAP half' : '15m inside lower VWAP half'),
+      : (direction === 'SHORT' ? '15m inside upper VWAP half' : '15m inside lower VWAP half'),
   };
 }
 
