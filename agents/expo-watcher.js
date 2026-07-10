@@ -132,7 +132,7 @@ const BYBIT_URL    = 'https://api.bybit.com/v5/market/kline';
 
 // ── Shared state ─────────────────────────────────────────────────
 const biasMap   = {};   // sym → { direction, labelTime, openedAt, traded }
-const lastSeen  = {};   // sym → labelTime of the most recently processed Expo label
+const lastSeen  = {};   // sym → labelTime:type of the most recently processed Expo label
 const cooldowns = new Map();
 const watchState = {}; // sym -> latest observed 15m Expo study state
 const structureExitSeen = new Set(); // sym:labelTime:direction exits already handled
@@ -285,8 +285,9 @@ function watch15m(client, ind, tvTicker) {
         return;
       }
       watchState[sym] = { updatedAt: Date.now(), latestType: newest.type, latestTime: newest.time, labelCount: labels.length, periodCount: periods.length };
-      if (lastSeen[sym] === newest.time) return;   // already processed this label
-      lastSeen[sym] = newest.time;
+      const seenKey = `${newest.time}:${newest.type}`;
+      if (lastSeen[sym] === seenKey) return;   // already processed this exact label
+      lastSeen[sym] = seenKey;
 
       const age = Date.now() - newest.time;
       const at  = new Date(newest.time).toISOString().slice(0, 16);
