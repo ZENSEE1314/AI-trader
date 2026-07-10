@@ -73,10 +73,10 @@ function expoPivotAtOuterVwap(periodsNewestFirst, labelX, direction) {
   // - LH short is valid below VWAP mid, or above the upper outer VWAP band.
   // - Inside the wrong VWAP half is blocked for both directions.
   // 1m may be inside VWAP/range; only this 15m context decides trend alignment.
-  const high = pHigh(bar), low = pLow(bar), close = bar.close;
-  const pivotRef = direction === 'SHORT'
-    ? Math.min(close ?? high, high ?? close)
-    : Math.max(close ?? low, low ?? close);
+  const high = pHigh(bar), low = pLow(bar);
+  // Gate the actual Expo pivot, not the candle close. An HL wick below VWAP
+  // mid is still a lower-half HL even if the candle closes back above mid.
+  const pivotRef = direction === 'SHORT' ? high : low;
   const longUpperHalf = pivotRef >= vw;
   const longLowerOuter = pivotRef <= lower;
   const shortLowerHalf = pivotRef <= vw;
