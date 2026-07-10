@@ -4694,14 +4694,25 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
         const posRaw = await client.getOpenPositions(sym).catch(() => []);
         const posArr = Array.isArray(posRaw) ? posRaw
           : (posRaw?.positionList || posRaw?.list || []);
-        const pos = posArr.find(p => (p.symbol || '').toUpperCase() === sym);
-        if (!pos) continue;
+        let pos = posArr.find(p => (p.symbol || '').toUpperCase() === sym);
+        if (!pos) {
+          const account = await client.getAccountInformation().catch(() => null);
+          const accountPositions = Array.isArray(account?.positions) ? account.positions : [];
+          pos = accountPositions.find(p => (p.symbol || '').toUpperCase() === sym);
+        }
+        if (!pos) {
+          bLog.trade(`[CLOSE-REVERSAL] ${sym}: no Bitunix live position found for ${key.email || key.id}`);
+          continue;
+        }
 
-        const qty   = parseFloat(pos.qty || pos.size || pos.positionAmt || 0);
+        const rawQty = parseFloat(pos.qty || pos.size || pos.positionAmt || 0);
+        const qty    = Math.abs(rawQty);
         if (qty === 0) continue;
 
-        const isLong = (pos.side || '').toUpperCase() === 'BUY'
-                    || (pos.side || '').toUpperCase() === 'LONG';
+        const sideText = (pos.side || '').toUpperCase();
+        const isLong = sideText
+          ? (sideText === 'BUY' || sideText === 'LONG')
+          : rawQty > 0;
         const posId  = pos.positionId || pos.id;
 
         // Use flashClose (single-call full close) — falls back to closePosition
@@ -4710,7 +4721,9 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
           try {
             await client.flashClose({ positionId: posId });
             closed = true;
-          } catch (_) {}
+          } catch (flashErr) {
+            bLog.trade(`[CLOSE-REVERSAL] ${sym}: flashClose failed for ${key.email || key.id}, falling back: ${flashErr.message}`);
+          }
         }
         if (!closed) {
           await client.closePosition({ symbol: sym, side: isLong ? 'BUY' : 'SELL', qty, positionId: posId });
