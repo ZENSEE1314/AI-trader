@@ -4742,7 +4742,8 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
           [reason, sym, key.id]
         ).catch(() => {});
 
-        const livePrice = await getLivePrice(sym).catch(() => null);
+        anyClosed = true;
+        const livePrice = await client.getMarketPrice(sym).catch(() => null);
         const dir       = isLong ? 'LONG' : 'SHORT';
         bLog.trade(`[CLOSE-REVERSAL] ✓ ${sym} ${dir} closed for ${key.email} @ ~$${livePrice ?? '?'}`);
         await notify(
@@ -4751,7 +4752,6 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
           `Reason: opposite signal fired\n` +
           `Exit: ~\`$${livePrice ? livePrice.toFixed(2) : '?'}\``
         );
-        anyClosed = true;
 
       } else if (key.platform === 'binance') {
         const { USDMClient } = require('binance');
