@@ -2175,10 +2175,10 @@ async function executeForAllUsers(pick) {
         let dirSl  = activeVer?.[dirSlKey]  != null && parseFloat(activeVer[dirSlKey])  > 0 ? parseFloat(activeVer[dirSlKey])  : globalSl;
         let dirTp  = activeVer?.[dirTpKey]  != null && parseFloat(activeVer[dirTpKey])  > 0 ? parseFloat(activeVer[dirTpKey])  : globalTp;
         if (pick.setup === 'EXPO_BASELINE') {
-          // Baseline Expo (20x): hard SL −50% / TP +35% of margin. Trailing kept ON
-          // (profit-lock only — never deepens a loss); pure no-trail is a later step.
+          // Baseline Expo (20x): hard SL -50% of margin. No profit TP/trailing;
+          // exits are handled by 15m Expo structure labels.
           dirSl = 0.50 / userLev;
-          dirTp = 0.35 / userLev;
+          dirTp = 0;
         } else if (isProfessionalBacktestSetup && pick.strategy !== 'VWAP_PULLBACK') {
           dirSl = 0.50 / userLev;
           dirTp = 0.75 / userLev;
@@ -2261,8 +2261,7 @@ async function executeForAllUsers(pick) {
           // Other strategies: fixed 30% margin SL, no hard TP (trailing handles exit)
           const isRangeBounce = pick.setup === 'RANGE_BOUNCE';
           const slPrice = (isRangeBounce && pick.sl) ? pick.sl : initialSlPrice;
-          // EXPO_BASELINE: no hard TP — it rides on calculateExpoTrail (locks +35% at
-          // TP1, then trails +15/+10). Other professional setups keep their hard TP.
+          // EXPO_BASELINE: no hard TP; exits by 15m structure labels. Other professional setups keep their hard TP.
           const bnTpPrice = (isProfessionalBacktestSetup && pick.setup !== 'EXPO_BASELINE')
             ? userTpPrice
             : (isRangeBounce && pick.tp1) ? pick.tp1 : null;

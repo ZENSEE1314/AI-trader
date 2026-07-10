@@ -10,7 +10,7 @@
 //           HL → long bias, LH → short bias.
 //   ENTRY : 1m native swing pullback — enter on the candle after a 1m swing
 //           low (long) / high (short). One trade per bias window.
-//   RISK  : 20x, hard SL −50% / TP +35% of margin, NO trailing, structure exit enabled
+//   RISK  : 20x, hard SL -50% of margin, no TP/trailing, structure exit enabled
 //           (setup='EXPO_BASELINE', trailing skipped in cycle.js/trail-watchdog).
 //   EXIT  : 15m Expo structure exit - HL long closes on HH/LH; LH short closes on LL/HL.
 //
@@ -128,7 +128,6 @@ const HEARTBEAT_MS = 5 * 60 * 1000;        // explain silent/no-trade periods
 const STALE_TV_MS  = 12 * 60 * 1000;       // reconnect if TradingView study stops updating
 const LEVERAGE     = 20;
 const SL_MARGIN    = 0.50;                 // hard SL −50% of margin
-const TP_MARGIN    = 0.35;                 // hard TP +35% of margin
 const BYBIT_URL    = 'https://api.bybit.com/v5/market/kline';
 
 // ── Shared state ─────────────────────────────────────────────────
@@ -394,7 +393,7 @@ async function scanEntries() {
       markTraded(sym, dir);
       biasMap[sym].traded = true;   // one trade per bias window
 
-      bLog(`[${sym}][1m] *** TRADE ${dir} | price=${price} | Expo bias + 1m swing | baseline SL50/TP35 ***`);
+      bLog(`[${sym}][1m] *** TRADE ${dir} | price=${price} | Expo bias + 1m swing | baseline SL50 | structure exits only ***`);
       const signal = {
         symbol: sym,
         side: isLong ? 'BUY' : 'SELL',
@@ -413,7 +412,6 @@ async function scanEntries() {
         timeframe: '1',
         leverage: LEVERAGE,
         slMarginFrac: SL_MARGIN / LEVERAGE,
-        tpMarginFrac: TP_MARGIN / LEVERAGE,
         isMomentumBreakout: true,
         override: true,
         receivedAt: Date.now(),
@@ -440,7 +438,7 @@ async function scanEntries() {
 
 // ── Start ─────────────────────────────────────────────────────────
 async function start() {
-  bLog(`Starting Expo baseline watcher — ${TV_SYMBOLS.map(normSym).join('/')} | 20x SL${SL_MARGIN*100}%/TP${TP_MARGIN*100}% | NO trail`);
+  bLog(`Starting Expo baseline watcher - ${TV_SYMBOLS.map(normSym).join('/')} | 20x SL${SL_MARGIN*100}% | structure exits only`);
   if (!process.env.TV_SESSION) bLog('⚠ TV_SESSION not set — Expo study will fail to load.');
   let ind;
   try { ind = await loadExpo(); }
