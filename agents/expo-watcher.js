@@ -10,8 +10,9 @@
 //           HL → long bias, LH → short bias.
 //   ENTRY : 1m native swing pullback — enter on the candle after a 1m swing
 //           low (long) / high (short). One trade per bias window.
-//   RISK  : 20x, hard SL −50% / TP +35% of margin, NO trailing, NO 15m exit
+//   RISK  : 20x, hard SL −50% / TP +35% of margin, NO trailing, structure exit enabled
 //           (setup='EXPO_BASELINE', trailing skipped in cycle.js/trail-watchdog).
+//   EXIT  : 15m Expo structure exit - HL long closes on HH/LH; LH short closes on LL/HL.
 //
 // ⚠ Validated on only ~8 days / ~7 trades per token — directional, not robust.
 // Signals go through injectTVSignal → cycle.js (same path as the old watcher).
@@ -135,6 +136,7 @@ const biasMap   = {};   // sym → { direction, labelTime, openedAt, traded }
 const lastSeen  = {};   // sym → labelTime of the most recently processed Expo label
 const cooldowns = new Map();
 const watchState = {}; // sym -> latest observed 15m Expo study state
+const structureExitSeen = new Set(); // sym:labelTime:direction exits already handled
 let   _client = null;
 let   _expoInd = null;
 let   _scanTimer = null;
@@ -198,6 +200,50 @@ function detectEntry(c1m, bias) {
 }
 
 // ── Indicator + 15m Expo label watch (shares one TV client) ──────
+async function closeExpoOnStructure(sym, labelType, labelTime) {
+  const exitDirection = (labelType === 'HH' || labelType === 'LH') ? 'LONG'
+    : (labelType === 'LL' || labelType === 'HL') ? 'SHORT'
+    : null;
+  if (!exitDirection) return;
+
+  const exitKey = `${sym}:${labelTime}:${exitDirection}`;
+  if (structureExitSeen.has(exitKey)) return;
+
+  let rows = [];
+  try {
+    const db = require('../db');
+    rows = await db.query(
+      `SELECT id, created_at
+       FROM trades
+       WHERE symbol = $1
+         AND direction = $2
+         AND status = 'OPEN'
+         AND COALESCE(setup, '') LIKE 'EXPO_BASELINE%'
+       ORDER BY created_at ASC`,
+      [sym, exitDirection]
+    );
+  } catch (e) {
+    bLog(`[${sym}][15m] structure exit DB check failed: ${e.message}`);
+    return;
+  }
+
+  const eligible = (Array.isArray(rows) ? rows : rows.rows || []).filter(t => {
+    const openedAt = t.created_at ? new Date(t.created_at).getTime() : 0;
+    return !openedAt || openedAt <= labelTime;
+  });
+  if (!eligible.length) return;
+
+  structureExitSeen.add(exitKey);
+  try {
+    const { closePositionForAllUsers } = require('../cycle');
+    bLog(`[${sym}][15m] Expo ${labelType} structure exit -> closing ${exitDirection} (${eligible.length} open EXPO trade row(s))`);
+    const closed = await closePositionForAllUsers(sym, `expo_structure_${labelType}`);
+    bLog(`[${sym}][15m] Expo ${labelType} structure exit ${closed ? 'sent' : 'found no exchange position'} for ${exitDirection}`);
+  } catch (e) {
+    structureExitSeen.delete(exitKey);
+    bLog(`[${sym}][15m] structure exit close failed: ${e.message}`);
+  }
+}
 async function loadExpo() {
   if (!_expoInd) _expoInd = await TradingView.getIndicator(EXPO_ID, 'last', process.env.TV_SESSION || '', process.env.TV_SESSION_SIGN || '');
   return _expoInd;
@@ -210,7 +256,7 @@ function watch15m(client, ind, tvTicker) {
   const study = new chart.Study(ind);
   study.onError((...e) => bLog(`[${sym}][15m] study error: ${e.join(' ')}`));
 
-  study.onUpdate(() => {
+  study.onUpdate(async () => {
     try {
       const labels  = (study.graphic && study.graphic.labels) || [];
       const periods = chart.periods || [];   // newest-first; label.x = bars-from-newest
@@ -245,6 +291,7 @@ function watch15m(client, ind, tvTicker) {
 
       const age = Date.now() - newest.time;
       const at  = new Date(newest.time).toISOString().slice(0, 16);
+      await closeExpoOnStructure(sym, newest.type, newest.time);
       if (newest.dir && age <= FRESH_MS) {
         const vwap = expoPivotAtOuterVwap(periods, newest.x, newest.dir);
         if (!vwap.pass) {
