@@ -404,8 +404,8 @@ async function runTrailCycle() {
           const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
           log(`[DIAG] ${key.email || key.id} | ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} live=$${livePrice} | lev=${leverage}x | capital=${pctDisplay} | curSL=$${currentSl.toFixed(pricePrec)} | exchSL=$${liveExchangeSl > 0 ? liveExchangeSl.toFixed(pricePrec) : 'N/A'} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
 
-          if (isExpoSetup(dbTrade?.setup) && capitalPct >= EXPO_TP1_CAPITAL) {
-            await manageExpoTpBitunix(posClient, dbTrade, pos, symbol, isLong, qty, entry, livePrice, pricePrec, capitalPct, leverage);
+          if (isExpoSetup(dbTrade?.setup)) {
+            log(`[EXPO-STRUCTURE-ONLY] ${symbol} Bitunix: TP1/TP2/trailing disabled; waiting for 15m structure exit or hard SL`);
             continue;
           }
 
@@ -527,6 +527,12 @@ async function runTrailCycle() {
 
         const profitPct  = isLong ? (curPrice - entryPrice) / entryPrice : (entryPrice - curPrice) / entryPrice;
         const capitalPct = profitPct * leverage;
+
+        if (isExpoSetup(trade.setup)) {
+          log(`[EXPO-STRUCTURE-ONLY] ${trade.symbol} Binance: TP1/TP2/trailing disabled; waiting for 15m structure exit or hard SL`);
+          continue;
+        }
+
 
         if (isExpoSetup(trade.setup) && capitalPct >= EXPO_TP1_CAPITAL) {
           try {

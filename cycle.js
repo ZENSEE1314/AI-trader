@@ -3138,6 +3138,10 @@ async function syncTradeStatus() {
               // ── SMC TP1-hit (Binance): close 50%, lock SL at TP1, ride runner to TP2 ──
               // EXPO_BASELINE has no stored tp_price — derive TP1 (+35%) / runner (+500%) from entry.
               const isExpoBn = isExpoSetup(trade.setup);
+              if (isExpoBn) {
+                bLog.trade(`[EXPO-STRUCTURE-ONLY] ${trade.symbol} Binance: TP1/TP2/trailing disabled; waiting for 15m structure exit or hard SL`);
+                continue;
+              }
               const bnSmcTp1 = isExpoBn ? (isLong ? entryPrice * (1 + 0.35 / tradeLev) : entryPrice * (1 - 0.35 / tradeLev)) : (parseFloat(trade.tp_price)  || 0);
               const bnSmcTp2 = isExpoBn ? (isLong ? entryPrice * (1 + 0.70 / tradeLev) : entryPrice * (1 - 0.70 / tradeLev)) : (parseFloat(trade.tp2_price) || 0);
               const bnTp1Hit = trade.smc_tp1_hit === true || trade.smc_tp1_hit === 't';
@@ -3468,6 +3472,10 @@ async function syncTradeStatus() {
               // EXPO_BASELINE: close 50% at TP1 +35%, lock SL at +35% (then calculateExpoTrail
               // rides the runner +15/+10). Other setups keep the +60% scale-out.
               const isExpoTp1   = isExpoSetup(trade.setup);
+              if (isExpoTp1) {
+                bLog.trade(`[EXPO-STRUCTURE-ONLY] ${trade.symbol} Bitunix: TP1/TP2/step-lock disabled; waiting for 15m structure exit or hard SL`);
+                continue;
+              }
               const TP1_CAPITAL = isExpoTp1 ? 0.35 : 0.60;
               const TP2_CAPITAL = isExpoTp1 ? 0.70 : 1.00; // Expo runner closes at +70% capital
               const SL_AT_TP1   = isExpoTp1 ? 0.35 : 0.45;
