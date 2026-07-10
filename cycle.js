@@ -4674,14 +4674,19 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
   let anyClosed = false;
 
   const keys = await db.query(`
-    SELECT ak.id, ak.platform, ak.user_id,
+    SELECT DISTINCT ak.id, ak.platform, ak.user_id,
            ak.api_key_enc, ak.iv, ak.auth_tag,
            ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
            u.email
     FROM api_keys ak
     JOIN users u ON u.id = ak.user_id
-    WHERE ak.enabled = true AND (ak.paused IS NULL OR ak.paused = false)
-  `).catch(() => []);
+    JOIN trades t ON t.api_key_id = ak.id
+    WHERE t.symbol = $1 AND t.status = 'OPEN'
+  `, [sym]).catch(() => []);
+
+  if (!keys.length) {
+    bLog.trade(`[CLOSE-REVERSAL] ${sym}: no open DB trade keys found`);
+  }
 
   for (const key of keys) {
     try {
