@@ -1990,6 +1990,26 @@ router.get('/debug-bitunix-history', async (req, res) => {
   }
 });
 
+// ── Dump the live Expo label cache (for offline backtests) ────
+router.get('/expo-labels', async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const dir = path.join(__dirname, '..', 'data', 'expo-labels');
+    const out = {};
+    if (fs.existsSync(dir)) {
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.endsWith('.json')) continue;
+        try { out[f.replace('-15m-expo.json', '')] = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); }
+        catch (_) {}
+      }
+    }
+    res.json({ labels: out });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Futures wallet balances for ALL user exchange keys ────
 router.get('/wallet-balances', async (req, res) => {
   try {
