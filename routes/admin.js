@@ -1595,14 +1595,18 @@ router.get('/open-positions', async (req, res) => {
        ORDER BY t.symbol, u.email`
     );
 
-    // 2. Fetch live positions from ALL enabled exchanges in parallel
+    // 2. Fetch live positions from ALL exchange keys in parallel.
+    // Emergency visibility must include disabled/paused keys too, because a key can be
+    // disabled after opening a position and still have live exchange exposure.
     const allKeys = await query(
       `SELECT ak.id, ak.api_key_enc, ak.iv, ak.auth_tag,
               ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
-              ak.platform, ak.leverage, u.email
+              ak.platform, ak.leverage, ak.enabled, ak.paused_by_admin, ak.paused_by_user, u.email
        FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
-       WHERE ak.enabled = true`
+       WHERE ak.platform IN ('bitunix', 'binance')
+         AND ak.api_key_enc IS NOT NULL
+         AND ak.api_secret_enc IS NOT NULL`
     );
 
     // key: "keyId:symbol" → true — for dedup against DB rows
@@ -1630,7 +1634,11 @@ router.get('/open-positions', async (req, res) => {
             // Only add if NOT already tracked in DB
             if (!dbKeySymSet.has(`${key.id}:${sym}`)) {
               const sideText = String(p.side || p.direction || '').toUpperCase();
-              const direction = sideText === 'BUY' || sideText === 'LONG' || rawQty > 0 ? 'LONG' : 'SHORT';
+              const direction = (sideText === 'BUY' || sideText === 'LONG')
+                ? 'LONG'
+                : (sideText === 'SELL' || sideText === 'SHORT')
+                  ? 'SHORT'
+                  : rawQty >= 0 ? 'LONG' : 'SHORT';
               livePositions.push({
                 keyId: key.id,
                 email: key.email,
@@ -1642,6 +1650,8 @@ router.get('/open-positions', async (req, res) => {
                 leverage: parseInt(key.leverage) || 20,
                 unrealizedPnl: parseFloat(p.unrealizedPNL || p.unrealizedPnl || p.unrealizedProfit || 0),
                 liveOnly: true, // not in DB
+                keyDisabled: key.enabled === false,
+                keyPaused: !!(key.paused_by_admin || key.paused_by_user),
               });
             }
           }
@@ -1675,6 +1685,8 @@ router.get('/open-positions', async (req, res) => {
                   leverage: parseInt(p.leverage) || 20,
                   unrealizedPnl: parseFloat(p.unrealizedProfit || 0),
                   liveOnly: true,
+                  keyDisabled: key.enabled === false,
+                  keyPaused: !!(key.paused_by_admin || key.paused_by_user),
                 });
               }
             }
@@ -1741,6 +1753,8 @@ router.get('/open-positions', async (req, res) => {
         email:     overrides.email     ?? t.email,
         platform:  overrides.platform  ?? t.platform,
         liveOnly:  overrides.liveOnly  ?? false,
+        keyDisabled: overrides.keyDisabled ?? false,
+        keyPaused: overrides.keyPaused ?? false,
         entry, curPrice, qty, leverage: lev,
         pnlUsdt:    parseFloat(pnlUsdt.toFixed(2)),
         pnlPct:     parseFloat((pricePnl * 100).toFixed(2)),
@@ -1757,6 +1771,7 @@ router.get('/open-positions', async (req, res) => {
         symbol: p.symbol, direction: p.direction, email: p.email,
         platform: p.platform, leverage: p.leverage, entry: p.entry,
         qty: p.qty, unrealizedPnl: p.unrealizedPnl, liveOnly: true,
+        keyDisabled: p.keyDisabled, keyPaused: p.keyPaused,
       })),
     ];
 
@@ -1978,10 +1993,12 @@ router.post('/emergency-close', async (req, res) => {
     const keys = await query(
       `SELECT ak.id, ak.api_key_enc, ak.iv, ak.auth_tag,
               ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
-              ak.platform, u.email
+              ak.platform, ak.enabled, ak.paused_by_admin, ak.paused_by_user, u.email
        FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
-       WHERE ak.enabled = true`
+       WHERE ak.platform IN ('bitunix', 'binance')
+         AND ak.api_key_enc IS NOT NULL
+         AND ak.api_secret_enc IS NOT NULL`
     );
 
     const results = [];
