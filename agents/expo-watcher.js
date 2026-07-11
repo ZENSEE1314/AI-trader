@@ -370,6 +370,12 @@ async function scanEntries() {
     }
     const b = biasAlive(sym);
     if (!b) continue;
+    const st = watchState[sym];
+    if (st && (st.latestType === 'HH' || st.latestType === 'LL') && (!st.latestTime || st.latestTime >= b.labelTime)) {
+      delete biasMap[sym];
+      bLog(`[${sym}][1m] ${b.direction} blocked - latest 15m Expo is ${st.latestType}, no entry on HH/LL`);
+      continue;
+    }
     if (!canTrade(sym, b.direction)) continue;
     try {
       const c1m = await fetch1m(BYBIT_SYM[sym], 240);
