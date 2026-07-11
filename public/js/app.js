@@ -4748,7 +4748,7 @@
         const dir = group.direction;
         const dirColor = dir === 'LONG' ? 'var(--color-success)' : 'var(--color-danger)';
 
-        const tradesHtml = group.trades.filter(t => !t.liveOnly).map(t => {
+        const tradesHtml = group.trades.map(t => {
           totalPnl += t.pnlUsdt;
           const dangerBg = t.danger === 'critical' ? 'rgba(239,68,68,0.15)' : t.danger === 'danger' ? 'rgba(239,68,68,0.08)' : t.danger === 'warning' ? 'rgba(255,176,32,0.06)' : '';
           const pnlColor = t.pnlUsdt >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
@@ -4775,11 +4775,11 @@
           </div>`;
         }).join('');
 
-        // Skip entire group if all trades are EXCHANGE ONLY (nothing bot-tracked to show)
         if (!tradesHtml) return '';
 
-        const botTradeCount = group.trades.filter(t => !t.liveOnly).length;
-        const groupPnl = group.trades.filter(t => !t.liveOnly).reduce((s, t) => s + t.pnlUsdt, 0);
+        const botTradeCount = group.trades.length;
+        const liveOnlyCount = group.trades.filter(t => t.liveOnly).length;
+        const groupPnl = group.trades.reduce((s, t) => s + t.pnlUsdt, 0);
         const groupColor = groupPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
 
         const oppositeDir = dir === 'LONG' ? 'SHORT' : 'LONG';
@@ -4792,6 +4792,7 @@
               <strong>${sym.replace('USDT','')}</strong>
               <span style="color:${dirColor};font-weight:700;font-size:0.8rem;">${dir}</span>
               <span style="font-size:0.72rem;color:var(--color-text-muted);">${botTradeCount} user(s)</span>
+              ${liveOnlyCount ? `<span style="font-size:0.68rem;color:#f59e0b;font-weight:700;">${liveOnlyCount} exchange only</span>` : ''}
             </div>
             <span style="font-weight:700;color:${groupColor};">${groupPnl >= 0 ? '+' : ''}$${groupPnl.toFixed(2)}</span>
           </div>

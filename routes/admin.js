@@ -1621,22 +1621,26 @@ router.get('/open-positions', async (req, res) => {
             client.getOpenPositions(),
             new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
           ]);
-          const positions = Array.isArray(raw) ? raw : [];
+          const positions = Array.isArray(raw) ? raw : (raw?.positionList || raw?.list || []);
           for (const p of positions) {
-            if (parseFloat(p.qty || p.size || 0) === 0) continue;
+            const rawQty = parseFloat(p.qty ?? p.size ?? p.positionAmt ?? p.amount ?? p.openQty ?? 0);
+            const qty = Math.abs(rawQty);
+            if (!qty) continue;
             const sym = (p.symbol || '').toUpperCase();
             // Only add if NOT already tracked in DB
             if (!dbKeySymSet.has(`${key.id}:${sym}`)) {
+              const sideText = String(p.side || p.direction || '').toUpperCase();
+              const direction = sideText === 'BUY' || sideText === 'LONG' || rawQty > 0 ? 'LONG' : 'SHORT';
               livePositions.push({
                 keyId: key.id,
                 email: key.email,
                 platform: 'bitunix',
                 symbol: sym,
-                direction: (p.side || '').toUpperCase() === 'BUY' ? 'LONG' : 'SHORT',
-                entry: parseFloat(p.entryPrice || p.avgOpenPrice || 0),
-                qty: parseFloat(p.qty || p.size || 0),
+                direction,
+                entry: parseFloat(p.entryPrice || p.avgOpenPrice || p.openPrice || p.open_price || 0),
+                qty,
                 leverage: parseInt(key.leverage) || 20,
-                unrealizedPnl: parseFloat(p.unrealizedPNL || p.unrealizedPnl || 0),
+                unrealizedPnl: parseFloat(p.unrealizedPNL || p.unrealizedPnl || p.unrealizedProfit || 0),
                 liveOnly: true, // not in DB
               });
             }
@@ -2000,8 +2004,11 @@ router.post('/emergency-close', async (req, res) => {
           );
 
           // Fetch all open positions on exchange for this symbol (includes EXCHANGE ONLY)
-          const positions = await client.getOpenPositions(symbol);
-          const openPos = Array.isArray(positions) ? positions.filter(p => p.symbol === symbol && parseFloat(p.qty) > 0) : [];
+          const positionsRaw = await client.getOpenPositions(symbol);
+          const positions = Array.isArray(positionsRaw) ? positionsRaw : (positionsRaw?.positionList || positionsRaw?.list || []);
+          const openPos = positions
+            .map(p => ({ ...p, qty: Math.abs(parseFloat(p.qty ?? p.size ?? p.positionAmt ?? p.amount ?? p.openQty ?? 0)) }))
+            .filter(p => (p.symbol || '').toUpperCase() === symbol && p.qty > 0);
 
           if (openPos.length === 0) {
             // No exchange position — clean up any phantom DB record
