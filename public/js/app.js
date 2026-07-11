@@ -4737,8 +4737,13 @@
     listEl.innerHTML = '<span style="color:var(--color-text-muted);">Loading...</span>';
     try {
       const data = await api('GET', '/api/admin/open-positions');
+      const warningsHtml = (data.keyErrors || []).map(e =>
+        `<div style="padding:6px 8px;margin-bottom:4px;background:rgba(245,158,11,0.1);border:1px solid #f59e0b;border-radius:4px;font-size:0.72rem;color:#f59e0b;">⚠️ Could not fetch ${escapeHtml(e.platform)} positions for ${escapeHtml(e.email)} — ${escapeHtml(e.error)}. Positions on this account may be hidden; use manual close below if needed.</div>`
+      ).join('');
       if (!data.positions || !data.positions.length) {
-        listEl.innerHTML = '<span style="color:var(--color-success);">No open positions</span>';
+        listEl.innerHTML = warningsHtml + (warningsHtml
+          ? '<span style="color:#f59e0b;">No positions listed, but some accounts could not be checked.</span>'
+          : '<span style="color:var(--color-success);">No open positions</span>');
         return;
       }
 
@@ -4801,7 +4806,7 @@
       }).join('');
 
       const totalColor = totalPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
-      listEl.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);padding:6px 0;border-bottom:1px solid var(--color-border-muted);">
+      listEl.innerHTML = warningsHtml + `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);padding:6px 0;border-bottom:1px solid var(--color-border-muted);">
         <span style="font-size:0.85rem;font-weight:600;">Total Open P&L:</span>
         <span style="font-size:1rem;font-weight:700;color:${totalColor};">${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</span>
       </div>${html}`;
@@ -4840,6 +4845,16 @@
       statusEl.style.color = '#ef4444';
       showToast('Close failed: ' + err.message, 'error');
     }
+  }
+
+  // Fallback when the positions list is wrong/empty: close any symbol by name.
+  // The backend sweeps ALL accounts for it, so this works even if listing failed.
+  function emergencyCloseManualSymbol() {
+    const input = document.getElementById('emergency-manual-symbol');
+    let symbol = (input?.value || '').trim().toUpperCase();
+    if (!symbol) { showToast('Enter a symbol, e.g. SOLUSDT', 'error'); return; }
+    if (!symbol.endsWith('USDT')) symbol += 'USDT';
+    emergencyCloseToken(symbol);
   }
 
   async function emergencyCloseAll() {
@@ -5925,7 +5940,7 @@
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadKronosPredictions,
-    loadOpenPositions, emergencyCloseToken, emergencyCloseAll, reverseOpenPosition,
+    loadOpenPositions, emergencyCloseToken, emergencyCloseAll, emergencyCloseManualSymbol, reverseOpenPosition,
     loadDirectionOverride, setDirectionOverride, reverseDirection,
     loadSingleUserMode, toggleSingleUserMode,
     setTokenDirection, updateTokenDirStatus, loadTokenDirections, reverseTokenDirection,

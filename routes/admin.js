@@ -1584,12 +1584,13 @@ router.get('/open-positions', async (req, res) => {
     const { BitunixClient } = require('../bitunix-client');
 
     // 1. DB-tracked OPEN trades
+    // LEFT JOIN: an OPEN trade must stay visible even if its api_key row was deleted
     const rows = await query(
       `SELECT t.id, t.symbol, t.direction, t.entry_price, t.quantity, t.leverage,
               t.sl_price, t.tp_price, t.trailing_sl_price, t.pnl_usdt,
-              t.created_at, u.email, ak.platform, ak.id as key_id
+              t.created_at, u.email, COALESCE(ak.platform, 'key deleted') as platform, ak.id as key_id
        FROM trades t
-       JOIN api_keys ak ON ak.id = t.api_key_id
+       LEFT JOIN api_keys ak ON ak.id = t.api_key_id
        JOIN users u ON u.id = t.user_id
        WHERE t.status = 'OPEN'
        ORDER BY t.symbol, u.email`
@@ -1614,6 +1615,7 @@ router.get('/open-positions', async (req, res) => {
 
     // Fetch live positions from each key in parallel (timeout 8s per key)
     const livePositions = []; // extra positions only on exchange, not in DB
+    const keyErrors = []; // fetch failures — surfaced so the panel never claims "no positions" on stale data
     const liveResults = await Promise.allSettled(allKeys.map(async key => {
       try {
         const apiKey    = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
@@ -1690,9 +1692,16 @@ router.get('/open-positions', async (req, res) => {
                 });
               }
             }
-          } catch (_) {} // Binance errors are non-fatal
+          } catch (binErr) {
+            // Non-fatal, but must be visible: hidden exposure is worse than a warning
+            keyErrors.push({ email: key.email, platform: 'binance', error: binErr.message });
+            console.error(`[OPEN-POSITIONS] Binance fetch failed for ${key.email}:`, binErr.message);
+          }
         }
-      } catch (_) {} // Key-level errors are non-fatal
+      } catch (keyErr) {
+        keyErrors.push({ email: key.email, platform: key.platform, error: keyErr.message });
+        console.error(`[OPEN-POSITIONS] Position fetch failed for ${key.email} (${key.platform}):`, keyErr.message);
+      }
     }));
 
     // 3. Fetch live prices — try Binance futures first, then Bybit spot as fallback
@@ -1783,7 +1792,7 @@ router.get('/open-positions', async (req, res) => {
       grouped[p.symbol].totalPnl += p.pnlUsdt;
     }
 
-    res.json({ positions: Object.values(grouped), all: positions, total: positions.length });
+    res.json({ positions: Object.values(grouped), all: positions, total: positions.length, keyErrors });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
