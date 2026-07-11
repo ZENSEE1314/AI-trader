@@ -291,6 +291,29 @@ class AccountantAgent extends BaseAgent {
 
       const client = new BitunixClient({ apiKey, apiSecret });
 
+      // Live open positions — an OPEN DB trade whose position is still on the
+      // exchange must never be force-closed against old history or GHOSTed.
+      const liveSymDir = new Set();
+      const livePosIds = new Set();
+      let liveFetchOk = false;
+      try {
+        const rawLive = await client.getOpenPositions();
+        const livePositions = Array.isArray(rawLive) ? rawLive : (rawLive?.positionList || rawLive?.list || []);
+        for (const p of livePositions) {
+          const lQty = Math.abs(parseFloat(p.qty ?? p.size ?? p.amount ?? 0));
+          if (!lQty) continue;
+          const lSym = (p.symbol || '').toUpperCase();
+          const lSide = (p.side || p.positionSide || '').toUpperCase();
+          const lDir = (lSide === 'LONG' || lSide === 'BUY') ? 'LONG' : 'SHORT';
+          liveSymDir.add(`${lSym}:${lDir}`);
+          const lPosId = String(p.positionId || p.id || '');
+          if (lPosId) livePosIds.add(lPosId);
+        }
+        liveFetchOk = true;
+      } catch (e) {
+        bLog.error(`[ACCT-SYNC] key#${key.id} live positions fetch failed: ${e.message} — GHOST marking skipped this round`);
+      }
+
       // Fetch ALL DB trades for this key — include OPEN so we can close them from exchange
       let dbTrades;
       try {
@@ -376,12 +399,18 @@ class AccountantAgent extends BaseAgent {
               );
             }
             if (!existing) {
-              existing = dbTrades.find(t =>
+              // An OPEN trade may only be matched to CLOSED history when no live
+              // position exists for the same symbol+direction (otherwise the live
+              // position IS the trade, and this match would phantom-close it) and
+              // the history position closed after the trade opened.
+              const liveBlocksOpenMatch = liveSymDir.has(`${sym}:${direction}`);
+              existing = (!liveBlocksOpenMatch ? dbTrades.find(t =>
                 t.symbol === sym && t.direction === direction && t.status === 'OPEN' &&
-                Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.003
-              ) || dbTrades.find(t =>
+                Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.003 &&
+                (!closeMs || closeMs >= new Date(t.created_at).getTime())
+              ) : null) || dbTrades.find(t =>
                 t.symbol === sym && t.direction === direction &&
-                !t.bitunix_position_id &&
+                t.status !== 'OPEN' && !t.bitunix_position_id &&
                 Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.003
               );
             }
@@ -426,10 +455,15 @@ class AccountantAgent extends BaseAgent {
         }
       }
 
-      // Mark stale OPEN trades > 5 min old with no exchange match as GHOST
+      // Mark stale OPEN trades > 5 min old with no exchange match as GHOST.
+      // A trade whose position is still LIVE on the exchange is not a ghost —
+      // this previously ghosted healthy trades because only closed history was
+      // checked, leaving real positions unmanaged (no structure exit, no SL).
       const fiveMinsAgo = new Date(Date.now() - 5 * 60_000);
-      const staleOpens = dbTrades.filter(t =>
-        t.status === 'OPEN' && !matchedDbIds.has(t.id) && new Date(t.created_at) < fiveMinsAgo
+      const staleOpens = !liveFetchOk ? [] : dbTrades.filter(t =>
+        t.status === 'OPEN' && !matchedDbIds.has(t.id) && new Date(t.created_at) < fiveMinsAgo &&
+        !liveSymDir.has(`${t.symbol}:${t.direction}`) &&
+        !(t.bitunix_position_id && livePosIds.has(String(t.bitunix_position_id)))
       );
       for (const t of staleOpens) {
         try {

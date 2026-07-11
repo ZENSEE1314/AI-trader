@@ -370,10 +370,14 @@ async function scanEntries() {
     }
     const b = biasAlive(sym);
     if (!b) continue;
+    // Entry is valid ONLY while the bias's own HL (long) / LH (short) is still the
+    // newest 15m label. A newer label of any type — or the same bar repainting to
+    // HH/LL — invalidates the setup. This is what blocks entries at HH.
+    const expectedType = b.direction === 'LONG' ? 'HL' : 'LH';
     const st = watchState[sym];
-    if (st && (st.latestType === 'HH' || st.latestType === 'LL') && (!st.latestTime || st.latestTime >= b.labelTime)) {
+    if (!st || st.latestType !== expectedType || st.latestTime !== b.labelTime) {
       delete biasMap[sym];
-      bLog(`[${sym}][1m] ${b.direction} blocked - latest 15m Expo is ${st.latestType}, no entry on HH/LL`);
+      bLog(`[${sym}][1m] ${b.direction} blocked - latest 15m Expo is ${st ? st.latestType : 'unknown'}, entry requires its ${expectedType} to still be newest`);
       continue;
     }
     if (!canTrade(sym, b.direction)) continue;
@@ -396,6 +400,15 @@ async function scanEntries() {
         continue;
       }
       bLog(`[${sym}][1m] TimeFM confirmed ${dir}: ${timefm.reason}${timefmMove}`);
+
+      // Final gate: the 1m fetch + TimeFM check take seconds — re-verify the 15m
+      // label didn't change/repaint in that gap before committing the order.
+      const stFinal = watchState[sym];
+      if (!stFinal || stFinal.latestType !== expectedType || stFinal.latestTime !== b.labelTime) {
+        delete biasMap[sym];
+        bLog(`[${sym}][1m] ${dir} aborted at fire time - 15m Expo now ${stFinal ? stFinal.latestType : 'unknown'}, no longer a fresh ${expectedType}`);
+        continue;
+      }
 
       markTraded(sym, dir);
       biasMap[sym].traded = true;   // one trade per bias window
