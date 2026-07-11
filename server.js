@@ -92,6 +92,11 @@ app.use(express.static(path.resolve(__dirname, 'public'), {
     if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     }
+    // JS/CSS must revalidate on every load (cheap 304 via ETag) — a stale
+    // cached app.js once hid live positions from the emergency panel for days
+    if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
   },
 }));
 
