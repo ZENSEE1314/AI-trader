@@ -4847,6 +4847,42 @@
     }
   }
 
+  async function loadUserWallets() {
+    const listEl = document.getElementById('user-wallets-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<span style="color:var(--color-text-muted);">Loading...</span>';
+    try {
+      const data = await api('GET', '/api/admin/wallet-balances');
+      if (!data.wallets || !data.wallets.length) {
+        listEl.innerHTML = '<span style="color:var(--color-text-muted);">No exchange keys found</span>';
+        return;
+      }
+      const rows = data.wallets.map(w => {
+        const flags = [w.enabled ? '' : 'disabled', w.paused ? 'paused' : ''].filter(Boolean).join(', ');
+        if (w.error) {
+          return `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-bottom:1px solid var(--color-border-muted);">
+            <span>${escapeHtml(w.email)} <span style="font-size:0.7rem;color:var(--color-text-muted);">${w.platform} #${w.keyId}${flags ? ' • ' + flags : ''}</span></span>
+            <span style="color:#f59e0b;font-size:0.75rem;">⚠️ ${escapeHtml(w.error)}</span>
+          </div>`;
+        }
+        const upColor = w.unrealized > 0 ? 'var(--color-success)' : w.unrealized < 0 ? 'var(--color-danger)' : 'var(--color-text-muted)';
+        return `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-bottom:1px solid var(--color-border-muted);">
+          <span>${escapeHtml(w.email)} <span style="font-size:0.7rem;color:var(--color-text-muted);">${w.platform} #${w.keyId}${flags ? ' • ' + flags : ''}</span></span>
+          <span style="text-align:right;">
+            <strong>$${w.equity.toFixed(2)}</strong>
+            <span style="font-size:0.7rem;color:var(--color-text-muted);">avail $${w.available.toFixed(2)} • in-pos $${w.inPosition.toFixed(2)}</span>
+            <span style="font-size:0.7rem;color:${upColor};">uP&L ${w.unrealized >= 0 ? '+' : ''}$${w.unrealized.toFixed(2)}</span>
+          </span>
+        </div>`;
+      }).join('');
+      listEl.innerHTML = `<div style="display:flex;justify-content:space-between;padding:6px 8px;border-bottom:2px solid var(--color-border-muted);font-weight:700;">
+        <span>Total equity (all keys)</span><span>$${(data.totalEquity || 0).toFixed(2)}</span>
+      </div>${rows}`;
+    } catch (err) {
+      listEl.innerHTML = '<span style="color:#ef4444;">Failed: ' + (err.message || err) + '</span>';
+    }
+  }
+
   // Fallback when the positions list is wrong/empty: close any symbol by name.
   // The backend sweeps ALL accounts for it, so this works even if listing failed.
   function emergencyCloseManualSymbol() {
@@ -5940,7 +5976,7 @@
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadKronosPredictions,
-    loadOpenPositions, emergencyCloseToken, emergencyCloseAll, emergencyCloseManualSymbol, reverseOpenPosition,
+    loadOpenPositions, emergencyCloseToken, emergencyCloseAll, emergencyCloseManualSymbol, loadUserWallets, reverseOpenPosition,
     loadDirectionOverride, setDirectionOverride, reverseDirection,
     loadSingleUserMode, toggleSingleUserMode,
     setTokenDirection, updateTokenDirStatus, loadTokenDirections, reverseTokenDirection,

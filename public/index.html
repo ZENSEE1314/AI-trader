@@ -1842,6 +1842,16 @@
               <button class="btn btn-sm" style="font-size:0.75rem;background:#ef4444;color:#fff;border:none;font-weight:700;padding:4px 12px;" onclick="window.CryptoBot.emergencyCloseManualSymbol()">Close Symbol</button>
             </div>
           </div>
+          <div style="margin-bottom:var(--space-3);padding:var(--space-3);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);background:var(--color-bg-raised);">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+              <div>
+                <strong style="font-size:0.9rem;">💰 User Futures Wallets</strong>
+                <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:2px;">Live balance per exchange key: available + in-position margin + unrealized P&amp;L.</div>
+              </div>
+              <button class="btn btn-sm" style="font-size:0.75rem;padding:4px 12px;" onclick="window.CryptoBot.loadUserWallets()">Refresh</button>
+            </div>
+            <div id="user-wallets-list" style="font-size:0.8rem;color:var(--color-text-muted);">Click Refresh to load wallet balances</div>
+          </div>
           <div style="margin-bottom:var(--space-3);display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
             <button class="btn btn-sm" id="fix-all-data-btn" style="font-size:0.75rem;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;border:none;" onclick="window.CryptoBot.adminFixAllData(this)">🔄 Fix All Data</button>
             <span id="resync-bitunix-status" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
@@ -2992,7 +3002,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
   </div>
 
   <script src="/js/trading-floor.js?v=20260520-smc-pro" defer></script>
-  <script src="/js/app.js?v=20260711-emergency-panel" defer></script>
+  <script src="/js/app.js?v=20260712-wallets" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {

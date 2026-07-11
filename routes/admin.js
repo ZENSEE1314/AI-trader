@@ -1990,6 +1990,85 @@ router.get('/debug-bitunix-history', async (req, res) => {
   }
 });
 
+// ── Futures wallet balances for ALL user exchange keys ────
+router.get('/wallet-balances', async (req, res) => {
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+
+    const keys = await query(
+      `SELECT ak.id, ak.platform, ak.enabled, ak.paused_by_admin, ak.paused_by_user,
+              ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag, u.email
+       FROM api_keys ak
+       JOIN users u ON u.id = ak.user_id
+       WHERE ak.platform IN ('bitunix', 'binance')
+         AND ak.api_key_enc IS NOT NULL
+         AND ak.api_secret_enc IS NOT NULL
+       ORDER BY u.email, ak.id`
+    );
+
+    const wallets = [];
+    await Promise.allSettled(keys.map(async key => {
+      const base = {
+        keyId: key.id, email: key.email, platform: key.platform,
+        enabled: key.enabled !== false, paused: !!(key.paused_by_admin || key.paused_by_user),
+      };
+      try {
+        const apiKey    = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+        const withTimeout = p => Promise.race([
+          p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+        ]);
+
+        if (key.platform === 'bitunix') {
+          const client = new BitunixClient({ apiKey, apiSecret });
+          const acc = await withTimeout(client.getAccount('USDT'));
+          const a = Array.isArray(acc) ? (acc[0] || {}) : (acc || {});
+          const available  = parseFloat(a.available ?? 0);
+          const margin     = parseFloat(a.margin ?? a.positionMargin ?? 0);
+          const frozen     = parseFloat(a.frozen ?? a.orderMargin ?? 0);
+          const unrealized = parseFloat(a.crossUnrealizedPNL ?? a.unrealizedPNL ?? 0)
+                           + parseFloat(a.isolationUnrealizedPNL ?? 0);
+          wallets.push({
+            ...base,
+            available:  parseFloat(available.toFixed(2)),
+            inPosition: parseFloat((margin + frozen).toFixed(2)),
+            unrealized: parseFloat(unrealized.toFixed(2)),
+            equity:     parseFloat((available + margin + frozen + unrealized).toFixed(2)),
+          });
+        } else {
+          const { USDMClient } = require('binance');
+          const PROXY_URL = process.env.QUOTAGUARDSTATIC_URL;
+          const opts = PROXY_URL
+            ? { requestOptions: { agent: new (require('https-proxy-agent').HttpsProxyAgent)(PROXY_URL) } }
+            : {};
+          const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, opts);
+          const acc = await withTimeout(client.getAccountInformation({ omitZeroBalances: true }));
+          const available  = parseFloat(acc.availableBalance ?? 0);
+          const wallet     = parseFloat(acc.totalWalletBalance ?? 0);
+          const unrealized = parseFloat(acc.totalUnrealizedProfit ?? 0);
+          wallets.push({
+            ...base,
+            available:  parseFloat(available.toFixed(2)),
+            inPosition: parseFloat(Math.max(0, wallet - available).toFixed(2)),
+            unrealized: parseFloat(unrealized.toFixed(2)),
+            equity:     parseFloat((wallet + unrealized).toFixed(2)),
+          });
+        }
+      } catch (e) {
+        wallets.push({ ...base, error: e.message });
+      }
+    }));
+
+    wallets.sort((a, b) => (a.email || '').localeCompare(b.email || '') || a.keyId - b.keyId);
+    const totalEquity = wallets.reduce((s, w) => s + (w.equity || 0), 0);
+    res.json({ wallets, totalEquity: parseFloat(totalEquity.toFixed(2)) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Emergency Close: close a specific token across ALL users ────
 router.post('/emergency-close', async (req, res) => {
   const symbol = (req.body.symbol || '').toUpperCase().trim();
