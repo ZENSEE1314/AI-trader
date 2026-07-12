@@ -9,8 +9,11 @@
 //        the reversal and failed (taker ratio in trade direction < 45%,
 //        from Binance futures klines) → market entry with the trend reversal.
 //        Level swept down + reclaimed → LONG; swept up + rejected → SHORT.
-// EXIT : 15m structure only — LONG closes on next confirmed LH/HH pivot,
-//        SHORT on next HL/LL — plus the hard SL (−50% margin) placed by cycle.
+// EXIT : TV Expo 15m structure labels via expo-watcher's closeExpoOnStructure
+//        (setup LIKE 'EXPO_BASELINE%' covers [SWEEP] trades: LONG closes on
+//        HH/LH, SHORT on LL/HL) — plus the hard SL (−50% margin) placed by
+//        cycle. Native quick pivots (L10/R1) proved too noisy for exits: they
+//        closed a winning ETH short on a phantom HL on 2026-07-12.
 // TAG  : setup EXPO_BASELINE (exact, required by the executor whitelist),
 //        setupName EXPO_BASELINE[SWEEP] so DB rows are distinguishable and all
 //        EXPO guards (no TP, no trailing, structure-only) apply via startsWith.
@@ -40,8 +43,6 @@ const BINANCE_URL = 'https://fapi.binance.com/fapi/v1/klines';
 // ── State ────────────────────────────────────────────────────────
 const cooldowns  = new Map();            // `${sym}:${dir}` → ts
 const firedKeys  = new Set();            // `${sym}:${pivotBarTime}` — levels already traded
-const exitSeen   = new Set();            // `${sym}:${labelTime}:${type}` — structure exits handled
-const lastLabel  = {};                   // sym → `${time}:${type}` last processed exit label
 const status     = {};                   // sym → diagnostics for /api/admin/sweep-status
 let   _timer     = null;
 
@@ -101,43 +102,6 @@ function newestLabel(pivots) {
     if (type) newest = { type, time: p.time, price: p.price };
   }
   return newest;
-}
-
-// ── Structure exit for OPEN sweep trades ─────────────────────────
-async function closeSweepOnStructure(sym, label) {
-  const exitDirection = (label.type === 'HH' || label.type === 'LH') ? 'LONG'
-    : (label.type === 'LL' || label.type === 'HL') ? 'SHORT' : null;
-  if (!exitDirection) return;
-  const exitKey = `${sym}:${label.time}:${label.type}`;
-  if (exitSeen.has(exitKey)) return;
-
-  let rows = [];
-  try {
-    const db = require('../db');
-    rows = await db.query(
-      `SELECT id FROM trades
-       WHERE symbol = $1 AND direction = $2 AND status = 'OPEN'
-         AND COALESCE(setup, '') LIKE 'EXPO_BASELINE[SWEEP]%'`,
-      [sym, exitDirection]
-    );
-  } catch (e) {
-    bLog(`[${sym}] structure exit DB check failed: ${e.message}`);
-    return;
-  }
-  const open = Array.isArray(rows) ? rows : rows.rows || [];
-  if (!open.length) return;
-
-  exitSeen.add(exitKey);
-  try {
-    const { closePositionForAllUsers } = require('../cycle');
-    bLog(`[${sym}] ${label.type} structure exit → closing ${exitDirection} (${open.length} open sweep trade(s))`);
-    const closed = await closePositionForAllUsers(sym, `sweep_structure_${label.type}`);
-    bLog(`[${sym}] structure exit ${closed ? 'sent' : 'found no exchange position'} for ${exitDirection}`);
-    status[sym].exitsFired = (status[sym].exitsFired || 0) + 1;
-  } catch (e) {
-    exitSeen.delete(exitKey);
-    bLog(`[${sym}] structure exit close failed: ${e.message}`);
-  }
 }
 
 // ── Entry: sweep + reclaim + flow gates on the latest closed bar ──
@@ -236,18 +200,9 @@ async function poll() {
       if (bars.length < SWING_LEN + 25) { status[sym] = { ...status[sym], lastError: 'not enough bars' }; continue; }
       const pivots = findPivots(bars);
 
-      // Structure exits first (a new label both closes and frees the slot)
+      // Exits are handled by expo-watcher's TV Expo structure labels (+ hard SL);
+      // the native label here is diagnostics only.
       const label = newestLabel(pivots);
-      if (label) {
-        const key = `${label.time}:${label.type}`;
-        if (lastLabel[sym] !== key) {
-          lastLabel[sym] = key;
-          // Only act on labels confirmed within the last 2 bars — never on startup backlog
-          if (Date.now() - label.time <= (CONFIRM + 2) * BAR_MS) {
-            await closeSweepOnStructure(sym, label);
-          }
-        }
-      }
 
       await checkEntries(sym, bars, pivots);
 
@@ -266,7 +221,6 @@ async function poll() {
   }
   // Prevent unbounded growth across weeks of uptime
   if (firedKeys.size > 5000) firedKeys.clear();
-  if (exitSeen.size > 2000) exitSeen.clear();
   _timer = setTimeout(poll, POLL_MS);
 }
 
