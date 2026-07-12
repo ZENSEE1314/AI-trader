@@ -51,6 +51,22 @@ setInterval(cleanBotLogs, 6 * 60 * 60 * 1000); // every 6 hours
   }
 })();
 
+// Start EQ-Sweep watcher — liquidity-sweep reversals (BTC/ETH/SOL), native 15m
+// pivots + Binance flow gates, 20x, structure exits. Disable with SWEEP_WATCHER=0.
+(async () => {
+  if (process.env.SWEEP_WATCHER === '0') {
+    console.log('[SERVER] EQ-Sweep watcher disabled via SWEEP_WATCHER=0');
+    return;
+  }
+  try {
+    const sweep = require('./agents/sweep-watcher');
+    await sweep.start();
+    console.log('[SERVER] EQ-Sweep watcher started (BTC/ETH/SOL, 20x, structure exits)');
+  } catch (err) {
+    console.error('[SERVER] EQ-Sweep watcher failed to start:', err.message);
+  }
+})();
+
 // Exhaustive optimizer DISABLED per owner (backtests treated as unreliable — no more testing).
 // (async () => {
 //   try {

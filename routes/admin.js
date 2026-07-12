@@ -1990,6 +1990,15 @@ router.get('/debug-bitunix-history', async (req, res) => {
   }
 });
 
+// ── EQ-Sweep watcher live status ────
+router.get('/sweep-status', (req, res) => {
+  try {
+    res.json(require('../agents/sweep-watcher').getStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Dump the live Expo label cache (for offline backtests) ────
 router.get('/expo-labels', async (req, res) => {
   try {
