@@ -1999,6 +1999,15 @@ router.get('/sweep-status', (req, res) => {
   }
 });
 
+// ── Expo label watcher live status ────
+router.get('/expo-status', (req, res) => {
+  try {
+    res.json(require('../agents/expo-watcher').getStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Dump the live Expo label cache (for offline backtests) ────
 router.get('/expo-labels', async (req, res) => {
   try {

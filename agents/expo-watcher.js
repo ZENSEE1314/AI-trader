@@ -468,5 +468,28 @@ async function start() {
   _scanTimer = setTimeout(scanEntries, 5000);
 }
 
+function getStatus() {
+  const now = Date.now();
+  const symbols = {};
+  for (const tv of TV_SYMBOLS) {
+    const sym = normSym(tv);
+    const st = watchState[sym];
+    const bias = biasMap[sym];
+    symbols[sym] = {
+      studyUpdateAgeMin: st ? Math.round((now - st.updatedAt) / 60000) : null,
+      latestLabel: st && st.latestTime ? `${st.latestType}@${new Date(st.latestTime).toISOString().slice(0, 16)}` : (st ? st.latestType : 'no update yet'),
+      labelAgeMin: st && st.latestTime ? Math.round((now - st.latestTime) / 60000) : null,
+      bias: bias ? { direction: bias.direction, openMin: Math.round((now - bias.openedAt) / 60000), traded: bias.traded } : null,
+      cooldownLong:  Math.max(0, Math.round((COOLDOWN_MS - (now - (cooldowns.get(`${sym}:LONG`)  || 0))) / 60000)),
+      cooldownShort: Math.max(0, Math.round((COOLDOWN_MS - (now - (cooldowns.get(`${sym}:SHORT`) || 0))) / 60000)),
+    };
+  }
+  return {
+    config: { symbols: TV_SYMBOLS.map(normSym), freshLabelMaxMin: FRESH_MS / 60000, entryWindowMin: WINDOW_MS / 60000, leverage: LEVERAGE, slMargin: SL_MARGIN },
+    tvConnected: !!_client,
+    symbols,
+  };
+}
+
 if (require.main === module) start().catch(console.error);
-module.exports = { start };
+module.exports = { start, getStatus };
