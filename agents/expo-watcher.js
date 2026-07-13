@@ -4,9 +4,10 @@
 // ======================================================================
 // Entry (matches backtest-expo-struct.js "baseline"):
 //   BIAS  : 15m — read SMC Expo (PUB;26ae…) HL/LH structure labels live.
-//           When a FRESH HL/LH appears (its pivot < FRESH_MS old) the entry
-//           window opens NOW for WINDOW_MS. Old labels seen at startup are
-//           ignored (age guard) so we never trade stale structure.
+//           When a NEW HL/LH label appears in the feed (first sighting = its
+//           birth; pivot bar at most LABEL_MAX_AGE_MS old) the entry window
+//           opens NOW for WINDOW_MS. The startup/reconnect backlog is
+//           baselined and never traded.
 //           HL → long bias, LH → short bias.
 //   ENTRY : 1m native swing pullback — enter on the candle after a 1m swing
 //           low (long) / high (short). One trade per bias window.
@@ -121,7 +122,7 @@ const BYBIT_SYM    = { BTCUSDT: 'BTCUSDT', ETHUSDT: 'ETHUSDT', SOLUSDT: 'SOLUSDT
 const HISTORY_BARS = 300;
 const ENTRY_CONFIRM_MS = 10 * 60 * 1000;   // if no 1m structure appears in 10 candles, miss it
 const WINDOW_MS    = ENTRY_CONFIRM_MS;     // entry window once a fresh Expo HL/LH appears
-const FRESH_MS     = 5 * 60 * 1000;        // reject old 15m labels after startup/reconnect
+const LABEL_MAX_AGE_MS = 45 * 60 * 1000;   // newborn label tradeable if its pivot bar is ≤3 bars old (V-bottoms confirm late)
 const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
 const SCAN_MS      = 30_000;               // 1m entry scan cadence
 const HEARTBEAT_MS = 5 * 60 * 1000;        // explain silent/no-trade periods
@@ -255,6 +256,13 @@ function watch15m(client, ind, tvTicker) {
   const study = new chart.Study(ind);
   study.onError((...e) => bLog(`[${sym}][15m] study error: ${e.join(' ')}`));
 
+  // First update after (re)connect is backlog, not a newborn label — never
+  // open an entry window from it. Freshness is measured from when a label
+  // FIRST APPEARS in the feed, not from its pivot-bar time: TV draws V-bottom
+  // HLs one or more bars after the low, which the old 5-min pivot-age rule
+  // classified as stale (missed the 2026-07-12 22:15 BTC capitulation long).
+  let baselined = false;
+
   study.onUpdate(async () => {
     try {
       const labels  = (study.graphic && study.graphic.labels) || [];
@@ -286,28 +294,34 @@ function watch15m(client, ind, tvTicker) {
       }
       watchState[sym] = { updatedAt: Date.now(), latestType: newest.type, latestTime: newest.time, labelCount: labels.length, periodCount: periods.length };
       const seenKey = `${newest.time}:${newest.type}`;
-      if (lastSeen[sym] === seenKey) return;   // already processed this exact label
+      if (lastSeen[sym] === seenKey) { baselined = true; return; }   // unchanged since last look — feed is proven current
       lastSeen[sym] = seenKey;
 
       const age = Date.now() - newest.time;
       const at  = new Date(newest.time).toISOString().slice(0, 16);
-      await closeExpoOnStructure(sym, newest.type, newest.time);
-      if (newest.dir && age <= FRESH_MS) {
+      await closeExpoOnStructure(sym, newest.type, newest.time);   // missed exits still close on backlog
+      if (!baselined) {
+        baselined = true;
+        delete biasMap[sym];
+        bLog(`[${sym}][15m] baseline: Expo ${newest.type} @ ${at} — startup/reconnect backlog, no entry`);
+        return;
+      }
+      if (newest.dir && age <= LABEL_MAX_AGE_MS) {
         const vwap = expoPivotAtOuterVwap(periods, newest.x, newest.dir);
         if (!vwap.pass) {
           delete biasMap[sym];
           bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${vwap.reason}; ${newest.dir} requires 15m VWAP trend alignment`);
           return;
         }
-        // Fresh structure just printed → open the entry window now.
+        // Newborn structure label → open the entry window now.
         biasMap[sym] = { direction: newest.dir, labelTime: newest.time, openedAt: Date.now(), traded: false };
-        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (age ${Math.round(age / 60000)}m) → bias=${newest.dir} LIVE — window ${WINDOW_MS / 60000}m`);
+        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (pivot age ${Math.round(age / 60000)}m) → bias=${newest.dir} LIVE — window ${WINDOW_MS / 60000}m`);
       } else if (newest.dir) {
         delete biasMap[sym];
-        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (age ${Math.round(age / 60000)}m) — stale, bias cleared`);
+        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (pivot age ${Math.round(age / 60000)}m) — pivot older than ${LABEL_MAX_AGE_MS / 60000}m cap, bias cleared`);
       } else {
         delete biasMap[sym];
-        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (age ${Math.round(age / 60000)}m) — no HL/LH entry bias, bias cleared`);
+        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (pivot age ${Math.round(age / 60000)}m) — no HL/LH entry bias, bias cleared`);
       }
     } catch (e) { bLog(`[${sym}][15m] parse error: ${e.message}`); }
   });
@@ -485,7 +499,7 @@ function getStatus() {
     };
   }
   return {
-    config: { symbols: TV_SYMBOLS.map(normSym), freshLabelMaxMin: FRESH_MS / 60000, entryWindowMin: WINDOW_MS / 60000, leverage: LEVERAGE, slMargin: SL_MARGIN },
+    config: { symbols: TV_SYMBOLS.map(normSym), labelMaxAgeMin: LABEL_MAX_AGE_MS / 60000, entryWindowMin: WINDOW_MS / 60000, leverage: LEVERAGE, slMargin: SL_MARGIN },
     tvConnected: !!_client,
     symbols,
   };
