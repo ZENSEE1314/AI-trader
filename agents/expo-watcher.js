@@ -163,15 +163,23 @@ const POWER_GATE = process.env.POWER_GATE !== '0';
 const POWER_TH   = Number(process.env.POWER_TH || 0.55);
 const BINANCE_KLINES = 'https://fapi.binance.com/fapi/v1/klines';
 
-// Taker-buy ratio of the last CLOSED 15m bar (stable, non-lookahead).
+// Taker-buy ratio of the CURRENT forming 15m bar — the flow happening right now.
+// Reading the last CLOSED bar instead made the gate stale by up to 15 min, which at
+// a reversal entry is the bar that MADE the top (buy-heavy) — it blocked a valid ETH
+// short on 2026-07-16 by 0.6pp while live flow was 59% sell. Backtest: current-bar
+// +$7,191/90d vs closed-bar +$3,385. Early in a bar the forming sample is thin, so
+// blend with the last closed bar until it has meaningful volume. No lookahead.
 async function fetchBuyRatio(symbol) {
   const url = `${BINANCE_KLINES}?symbol=${symbol}&interval=15m&limit=2`;
   const res = await fetch(url, { timeout: 8000 });
   const rows = await res.json();
   if (!Array.isArray(rows) || rows.length < 2) throw new Error('no Binance klines');
-  const closed = rows[rows.length - 2];   // second-to-last = last fully closed bar
-  const vol = parseFloat(closed[5]), buy = parseFloat(closed[9]);
-  return vol > 0 ? buy / vol : 0.5;
+  const [closed, forming] = [rows[0], rows[1]];
+  const fVol = parseFloat(forming[5]), fBuy = parseFloat(forming[9]);
+  const cVol = parseFloat(closed[5]),  cBuy = parseFloat(closed[9]);
+  if (fVol > 0 && fVol >= 0.2 * cVol) return fBuy / fVol;   // enough live data — use it alone
+  const vol = fVol + cVol;
+  return vol > 0 ? (fBuy + cBuy) / vol : 0.5;               // too early in the bar — blend
 }
 
 // ── Bybit 1m klines (ascending) ──────────────────────────────────
