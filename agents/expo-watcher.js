@@ -127,7 +127,7 @@ const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
 const SCAN_MS      = 30_000;               // 1m entry scan cadence
 const HEARTBEAT_MS = 5 * 60 * 1000;        // explain silent/no-trade periods
 const STALE_TV_MS  = 12 * 60 * 1000;       // reconnect if TradingView study stops updating
-const LEVERAGE     = 20;
+const LEVERAGE     = Number(process.env.EXPO_LEVERAGE || 50);   // 50x per owner 2026-07-16 (backtest profit peak; SL auto-tightens to 1% price move). Roll back: set EXPO_LEVERAGE=20.
 const SL_MARGIN    = 0.50;                 // hard SL −50% of margin
 const BYBIT_URL    = 'https://api.bybit.com/v5/market/kline';
 
