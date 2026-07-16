@@ -159,32 +159,30 @@ function biasAlive(sym) {
   return Date.now() - b.openedAt <= ENTRY_CONFIRM_MS ? b : null;
 }
 
-// ── Power-confirmation gate ──────────────────────────────────────
-// Only fire an entry when taker flow backs the direction (buying power for a
-// long, selling power for a short). Backtest (90d, live-rules): turns the label
-// strategy from −$1,178 to +$3,950, all 3 tokens positive in both windows.
+// ── Power-confirmation gate (evaluated ONCE, at the 15m label) ────
+// A structure label only opens an entry window if taker flow backs its direction
+// (buying power for an HL long, selling power for an LH short), measured on the
+// label's own pivot bar. Without it the label strategy loses −$7,709/90d; with it
+// +$3,306 (WR 62%), all 3 tokens positive on 90d and 30d, and — because it gates
+// once at the source rather than per-pullback — the result holds at any entry
+// window length (5/20/40m), where the per-pullback form collapsed to −$7,117.
 // Env: POWER_GATE=0 disables; POWER_TH sets the taker-dominance threshold.
 const POWER_GATE = process.env.POWER_GATE !== '0';
 const POWER_TH   = Number(process.env.POWER_TH || 0.55);
 const BINANCE_KLINES = 'https://fapi.binance.com/fapi/v1/klines';
 
-// Taker-buy ratio of the CURRENT forming 15m bar — the flow happening right now.
-// Reading the last CLOSED bar instead made the gate stale by up to 15 min, which at
-// a reversal entry is the bar that MADE the top (buy-heavy) — it blocked a valid ETH
-// short on 2026-07-16 by 0.6pp while live flow was 59% sell. Backtest: current-bar
-// +$7,191/90d vs closed-bar +$3,385. Early in a bar the forming sample is thin, so
-// blend with the last closed bar until it has meaningful volume. No lookahead.
-async function fetchBuyRatio(symbol) {
-  const url = `${BINANCE_KLINES}?symbol=${symbol}&interval=15m&limit=2`;
+// Taker-buy ratio of ONE specific 15m bar. Used on the label's own pivot bar, which
+// is already closed when the label appears — so the flow is complete and exact, with
+// no lookahead and none of the stale-vs-forming ambiguity that plagued reading it at
+// entry time (that misread 41% when live flow was 59% and killed a valid ETH short).
+async function fetchBuyRatioAt(symbol, barTime) {
+  const url = `${BINANCE_KLINES}?symbol=${symbol}&interval=15m&startTime=${barTime}&limit=1`;
   const res = await fetch(url, { timeout: 8000 });
   const rows = await res.json();
-  if (!Array.isArray(rows) || rows.length < 2) throw new Error('no Binance klines');
-  const [closed, forming] = [rows[0], rows[1]];
-  const fVol = parseFloat(forming[5]), fBuy = parseFloat(forming[9]);
-  const cVol = parseFloat(closed[5]),  cBuy = parseFloat(closed[9]);
-  if (fVol > 0 && fVol >= 0.2 * cVol) return fBuy / fVol;   // enough live data — use it alone
-  const vol = fVol + cVol;
-  return vol > 0 ? (fBuy + cBuy) / vol : 0.5;               // too early in the bar — blend
+  if (!Array.isArray(rows) || !rows.length || +rows[0][0] !== barTime) throw new Error('bar not found');
+  const vol = parseFloat(rows[0][5]), buy = parseFloat(rows[0][9]);
+  if (!(vol > 0)) throw new Error('zero volume bar');
+  return buy / vol;
 }
 
 // ── Bybit 1m klines (ascending) ──────────────────────────────────
@@ -346,7 +344,30 @@ function watch15m(client, ind, tvTicker) {
           bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${vwap.reason}; ${newest.dir} requires 15m VWAP trend alignment`);
           return;
         }
-        // Newborn structure label → open the entry window now.
+        // Power-confirmation gate — evaluated ONCE, here, on the label's own pivot
+        // bar (closed → complete flow). Fail = no window opens at all, so the 1m
+        // scanner never re-rolls the dice on later bars. Backtest: this one-shot
+        // form holds +$3.3k/90d at ANY window length (5/20/40m), while gating at
+        // entry collapses to −$7.1k once the window exceeds one 15m bar.
+        if (POWER_GATE) {
+          let buyRatio;
+          try {
+            buyRatio = await fetchBuyRatioAt(BYBIT_SYM[sym], newest.time);
+          } catch (e) {
+            delete biasMap[sym];
+            bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: power flow unavailable (${e.message}) — failing closed, no window`);
+            return;
+          }
+          const powerInDir = newest.dir === 'LONG' ? buyRatio : 1 - buyRatio;
+          const side = newest.dir === 'LONG' ? 'buying' : 'selling';
+          if (powerInDir < POWER_TH) {
+            delete biasMap[sym];
+            bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${side} power ${(powerInDir * 100).toFixed(0)}% < ${POWER_TH * 100}% — no entry window opened`);
+            return;
+          }
+          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} power confirmed: ${side} ${(powerInDir * 100).toFixed(0)}%`);
+        }
+        // Newborn structure label + flow behind it → open the entry window now.
         biasMap[sym] = { direction: newest.dir, labelTime: newest.time, openedAt: Date.now(), traded: false };
         bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (pivot age ${Math.round(age / 60000)}m) → bias=${newest.dir} LIVE — window ${WINDOW_MS / 60000}m`);
       } else if (newest.dir) {
@@ -457,20 +478,9 @@ async function scanEntries() {
         continue;
       }
 
-      // Power-confirmation gate: require taker flow to back the direction. If the
-      // buying/selling power isn't there, DON'T fire and DON'T clear the bias —
-      // the next scan re-checks; the window expires if power never shows.
-      if (POWER_GATE) {
-        let buyRatio;
-        try { buyRatio = await fetchBuyRatio(BYBIT_SYM[sym]); }
-        catch (e) { bLog(`[${sym}][1m] ${dir} deferred: power flow unavailable (${e.message})`); continue; }
-        const powerInDir = isLong ? buyRatio : 1 - buyRatio;
-        if (powerInDir < POWER_TH) {
-          bLog(`[${sym}][1m] ${dir} WAITING: ${isLong ? 'buying' : 'selling'} power ${(powerInDir * 100).toFixed(0)}% < ${POWER_TH * 100}% — no trade until flow confirms`);
-          continue;
-        }
-        bLog(`[${sym}][1m] ${dir} power confirmed: ${(powerInDir * 100).toFixed(0)}% taker flow with trade`);
-      }
+      // NOTE: no power check here — it was already applied once at the 15m label,
+      // on that pivot bar's complete flow. Re-checking per-pullback made the gate
+      // window-length-fragile and forced the stale/forming bar guesswork.
 
       markTraded(sym, dir);
       biasMap[sym].traded = true;   // one trade per bias window
@@ -547,7 +557,7 @@ function getStatus() {
     };
   }
   return {
-    config: { symbols: TV_SYMBOLS.map(normSym), labelMaxAgeMin: LABEL_MAX_AGE_MS / 60000, entryWindowMin: WINDOW_MS / 60000, leverage: LEVERAGE, slMargin: SL_MARGIN, powerGate: POWER_GATE, powerTh: POWER_TH },
+    config: { symbols: TV_SYMBOLS.map(normSym), labelMaxAgeMin: LABEL_MAX_AGE_MS / 60000, entryWindowMin: WINDOW_MS / 60000, leverage: LEVERAGE, slMargin: SL_MARGIN, powerGate: POWER_GATE, powerTh: POWER_TH, powerAt: 'label' },
     tvConnected: !!_client,
     symbols,
   };
