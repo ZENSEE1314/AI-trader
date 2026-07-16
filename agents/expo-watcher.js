@@ -120,7 +120,12 @@ const EXPO_ID      = 'PUB;26ae10374a9d4b0591b5b51a41356e57';   // Smart Money Co
 const TV_SYMBOLS   = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT.P'];
 const BYBIT_SYM    = { BTCUSDT: 'BTCUSDT', ETHUSDT: 'ETHUSDT', SOLUSDT: 'SOLUSDT' };
 const HISTORY_BARS = 300;
-const ENTRY_CONFIRM_MS = 10 * 60 * 1000;   // if no 1m structure appears in 10 candles, miss it
+// 1m-confirm window: if no 1m structure appears within it, the setup is missed and
+// we go back to waiting for the next fresh 15m label. 5 candles per owner
+// 2026-07-17 — a setup's edge decays fast, so later entries are worse: backtest
+// 90d 5c +$3,306 / 10c +$3,385 / 15c +$2,424 / 20c −$7,117; recent 30d 5c +$1,435
+// vs 10c +$335. Env ENTRY_WINDOW_MIN to change without a redeploy.
+const ENTRY_CONFIRM_MS = Number(process.env.ENTRY_WINDOW_MIN || 5) * 60 * 1000;
 const WINDOW_MS    = ENTRY_CONFIRM_MS;     // entry window once a fresh Expo HL/LH appears
 const LABEL_MAX_AGE_MS = 45 * 60 * 1000;   // newborn label tradeable if its pivot bar is ≤3 bars old (V-bottoms confirm late)
 const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
@@ -146,7 +151,7 @@ let   _watchdogTimer = null;
 function canTrade(sym, dir)   { return Date.now() - (cooldowns.get(`${sym}:${dir}`) || 0) > COOLDOWN_MS; }
 function markTraded(sym, dir) { cooldowns.set(`${sym}:${dir}`, Date.now()); }
 function normSym(tv)          { return tv.replace(/.*:/, '').replace(/[^A-Z]/g, '').replace('USDTP', 'USDT'); }
-// Bias is live only for the first 5 one-minute candles after a fresh label.
+// Bias is live only for ENTRY_CONFIRM_MS after a fresh label.
 // If no 1m structure confirms inside that window, the 15m signal is missed.
 function biasAlive(sym) {
   const b = biasMap[sym];
@@ -407,7 +412,7 @@ async function scanEntries() {
     const rawBias = biasMap[sym];
     if (rawBias && !rawBias.traded && Date.now() - rawBias.openedAt > ENTRY_CONFIRM_MS) {
       rawBias.traded = true;
-      bLog(`[${sym}][1m] ${rawBias.direction} missed - no 1m structure within 10 candles`);
+      bLog(`[${sym}][1m] ${rawBias.direction} missed - no 1m structure within ${ENTRY_CONFIRM_MS / 60000} candles`);
       continue;
     }
     const b = biasAlive(sym);
