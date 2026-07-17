@@ -159,16 +159,28 @@ function biasAlive(sym) {
   return Date.now() - b.openedAt <= ENTRY_CONFIRM_MS ? b : null;
 }
 
+// ── Which symbols may open LABEL entries ──────────────────────────
+// All TV_SYMBOLS stay watched (their labels drive structure EXITS for both this
+// strategy AND the sweep watcher) — but only these open entry windows. ETH is
+// excluded: the label strategy has no edge on it (best profit factor across ~25
+// power/leverage/SL/volume configs was 1.03, i.e. breakeven, and negative on the
+// recent 30d), while BTC/SOL run PF 2.2-3.5. Env: EXPO_ENTRY_SYMBOLS.
+const ENTRY_SYMBOLS = new Set(
+  (process.env.EXPO_ENTRY_SYMBOLS || 'BTCUSDT,SOLUSDT').split(',').map(s => s.trim()).filter(Boolean)
+);
+
 // ── Power-confirmation gate (evaluated ONCE, at the 15m label) ────
-// A structure label only opens an entry window if taker flow backs its direction
-// (buying power for an HL long, selling power for an LH short), measured on the
-// label's own pivot bar. Without it the label strategy loses −$7,709/90d; with it
-// +$3,306 (WR 62%), all 3 tokens positive on 90d and 30d, and — because it gates
-// once at the source rather than per-pullback — the result holds at any entry
-// window length (5/20/40m), where the per-pullback form collapsed to −$7,117.
-// Env: POWER_GATE=0 disables; POWER_TH sets the taker-dominance threshold.
-const POWER_GATE = process.env.POWER_GATE !== '0';
-const POWER_TH   = Number(process.env.POWER_TH || 0.55);
+// A label opens an entry window only if taker flow on its own pivot bar carries
+// CONVICTION — and conviction lives at BOTH extremes:
+//   >= POWER_TH      the extreme was rejected on its own bar (a rejection candle)
+//   <  POWER_LOW_TH  the aggressors pushed it hard and FAILED = trapped (this is
+//                    the sweep strategy's mechanism, independently validated)
+// The 35-55% middle is no-conviction noise and bled −$6,220 across 311 trades.
+// BTC+SOL 90d: no gate −$7,709 | one-wing +$3,306 | two-wing +$7,024 (WR 71%);
+// 30d +$3,050 (WR 83%). Env: POWER_GATE=0 disables, POWER_LOW_TH=0 = one-wing.
+const POWER_GATE   = process.env.POWER_GATE !== '0';
+const POWER_TH     = Number(process.env.POWER_TH || 0.55);
+const POWER_LOW_TH = Number(process.env.POWER_LOW_TH || 0.35);
 const BINANCE_KLINES = 'https://fapi.binance.com/fapi/v1/klines';
 
 // Taker-buy ratio of ONE specific 15m bar. Used on the label's own pivot bar, which
@@ -338,6 +350,13 @@ function watch15m(client, ind, tvTicker) {
         return;
       }
       if (newest.dir && age <= LABEL_MAX_AGE_MS) {
+        // Label entries are disabled for this symbol (we still watch it, because its
+        // labels drive structure exits for open trades — including sweep trades).
+        if (!ENTRY_SYMBOLS.has(sym)) {
+          delete biasMap[sym];
+          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} — label entries disabled for ${sym} (exits still active)`);
+          return;
+        }
         const vwap = expoPivotAtOuterVwap(periods, newest.x, newest.dir);
         if (!vwap.pass) {
           delete biasMap[sym];
@@ -360,12 +379,15 @@ function watch15m(client, ind, tvTicker) {
           }
           const powerInDir = newest.dir === 'LONG' ? buyRatio : 1 - buyRatio;
           const side = newest.dir === 'LONG' ? 'buying' : 'selling';
-          if (powerInDir < POWER_TH) {
+          const pct = (powerInDir * 100).toFixed(0);
+          const rejected = powerInDir >= POWER_TH;                              // extreme rejected on its own bar
+          const trapped  = POWER_LOW_TH > 0 && powerInDir < POWER_LOW_TH;       // aggressors pushed and failed
+          if (!rejected && !trapped) {
             delete biasMap[sym];
-            bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${side} power ${(powerInDir * 100).toFixed(0)}% < ${POWER_TH * 100}% — no entry window opened`);
+            bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${side} power ${pct}% is mid-range (needs >=${POWER_TH * 100}% rejected, or <${POWER_LOW_TH * 100}% trapped) — no conviction, no window`);
             return;
           }
-          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} power confirmed: ${side} ${(powerInDir * 100).toFixed(0)}%`);
+          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} power confirmed: ${side} ${pct}% (${rejected ? 'rejected on its bar' : 'aggressors trapped'})`);
         }
         // Newborn structure label + flow behind it → open the entry window now.
         biasMap[sym] = { direction: newest.dir, labelTime: newest.time, openedAt: Date.now(), traded: false };
@@ -557,7 +579,12 @@ function getStatus() {
     };
   }
   return {
-    config: { symbols: TV_SYMBOLS.map(normSym), labelMaxAgeMin: LABEL_MAX_AGE_MS / 60000, entryWindowMin: WINDOW_MS / 60000, leverage: LEVERAGE, slMargin: SL_MARGIN, powerGate: POWER_GATE, powerTh: POWER_TH, powerAt: 'label' },
+    config: {
+      watched: TV_SYMBOLS.map(normSym), entrySymbols: [...ENTRY_SYMBOLS],
+      labelMaxAgeMin: LABEL_MAX_AGE_MS / 60000, entryWindowMin: WINDOW_MS / 60000,
+      leverage: LEVERAGE, slMargin: SL_MARGIN,
+      powerGate: POWER_GATE, powerTh: POWER_TH, powerLowTh: POWER_LOW_TH, powerAt: 'label',
+    },
     tvConnected: !!_client,
     symbols,
   };
