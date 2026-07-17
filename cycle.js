@@ -42,6 +42,15 @@ function isExpoSetup(setup) {
   return String(setup || '').startsWith('EXPO_BASELINE');
 }
 
+// ETH sweep trades are the ONE case that takes a hard TP (+35% margin). Every other
+// EXPO trade exits on 15m structure only — see the dirTp block in executeForAllUsers.
+const ETH_SWEEP_TP_MARGIN = Number(process.env.ETH_SWEEP_TP_MARGIN ?? 0.35);
+function isEthSweepTp(symbol, pick) {
+  return ETH_SWEEP_TP_MARGIN > 0
+    && symbol === 'ETHUSDT'
+    && String(pick?.setupName || '').includes('[SWEEP]');
+}
+
 // ── ADX helper ─────────────────────────────────────────────
 function calcADX(highs, lows, closes, period = 14) {
   if (highs.length < period + 1) return { adx: 0, diPlus: 0, diMinus: 0 };
@@ -2175,10 +2184,15 @@ async function executeForAllUsers(pick) {
         let dirSl  = activeVer?.[dirSlKey]  != null && parseFloat(activeVer[dirSlKey])  > 0 ? parseFloat(activeVer[dirSlKey])  : globalSl;
         let dirTp  = activeVer?.[dirTpKey]  != null && parseFloat(activeVer[dirTpKey])  > 0 ? parseFloat(activeVer[dirTpKey])  : globalTp;
         if (pick.setup === 'EXPO_BASELINE') {
-          // Baseline Expo (20x): hard SL -50% of margin. No profit TP/trailing;
+          // Baseline Expo: hard SL -50% of margin. No profit TP/trailing;
           // exits are handled by 15m Expo structure labels.
           dirSl = 0.50 / userLev;
-          dirTp = 0;
+          // EXCEPTION — ETH sweep trades only: hard TP at +35% margin. This is the
+          // only TP that improved BOTH windows (ETH sweep PF 2.22->2.38 on 90d,
+          // 1.05->1.23 on 30d). It must stay scoped to ETH+sweep: the same TP makes
+          // the BTC/SOL sweep worse (+$3,877 vs +$4,073), and every TP on the label
+          // strategy is worse (+$7,024 -> +$2,481 at TP+15%). Env ETH_SWEEP_TP_MARGIN=0 disables.
+          dirTp = isEthSweepTp(symbol, pick) ? (ETH_SWEEP_TP_MARGIN / userLev) : 0;
         } else if (isProfessionalBacktestSetup && pick.strategy !== 'VWAP_PULLBACK') {
           dirSl = 0.50 / userLev;
           dirTp = 0.75 / userLev;
@@ -2261,9 +2275,11 @@ async function executeForAllUsers(pick) {
           // Other strategies: fixed 30% margin SL, no hard TP (trailing handles exit)
           const isRangeBounce = pick.setup === 'RANGE_BOUNCE';
           const slPrice = (isRangeBounce && pick.sl) ? pick.sl : initialSlPrice;
-          // EXPO_BASELINE: no hard TP; exits by 15m structure labels. Other professional setups keep their hard TP.
+          // EXPO_BASELINE: no hard TP; exits by 15m structure labels — except ETH
+          // sweep trades, which take a +35% margin TP. Other professional setups keep theirs.
           const bnTpPrice = (isProfessionalBacktestSetup && pick.setup !== 'EXPO_BASELINE')
             ? userTpPrice
+            : isEthSweepTp(symbol, pick) ? userTpPrice
             : (isRangeBounce && pick.tp1) ? pick.tp1 : null;
 
           try { await userClient.setLeverage({ symbol, leverage: userLev }); } catch (_) {}
@@ -2497,7 +2513,9 @@ async function executeForAllUsers(pick) {
           const bxEntryRef = price;
           let bxTpPrice = null;
           if (isProfessionalBacktestSetup && pick.setup !== 'EXPO_BASELINE') {
-            bxTpPrice = parseFloat(parseFloat(userTpPrice).toFixed(8));   // EXPO rides on the trail — no hard TP
+            bxTpPrice = parseFloat(parseFloat(userTpPrice).toFixed(8));   // EXPO rides on structure — no hard TP
+          } else if (isEthSweepTp(symbol, pick)) {
+            bxTpPrice = parseFloat(parseFloat(userTpPrice).toFixed(8));   // ETH sweep: the one EXPO case with a TP
           } else if ((isScenarioA || isRangeBounce) && pick.tp1) {
             bxTpPrice = parseFloat(parseFloat(pick.tp1).toFixed(8));
           }
@@ -2511,7 +2529,7 @@ async function executeForAllUsers(pick) {
             qty: String(qty), orderType: bxOrderType, tradeSide: 'OPEN',
           };
           if (bxLimitPrice)                               orderPayload.price = String(bxLimitPrice);
-          if (bxTpPrice && (isScenarioA || isRangeBounce || isProfessionalBacktestSetup)) { orderPayload.tpPrice = String(bxTpPrice); orderPayload.tpOrderType = 'MARKET'; orderPayload.tpStopType = 'MARK_PRICE'; }
+          if (bxTpPrice && (isScenarioA || isRangeBounce || isProfessionalBacktestSetup || isEthSweepTp(symbol, pick))) { orderPayload.tpPrice = String(bxTpPrice); orderPayload.tpOrderType = 'MARKET'; orderPayload.tpStopType = 'MARK_PRICE'; }
 
           // Paper trading mode — simulate without real API calls.
           let order;
