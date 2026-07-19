@@ -78,11 +78,14 @@ const VERBOSE  = process.env.TRADES === '1';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ── Data loading ───────────────────────────────────────────────
+const MAX_BARS = parseInt(process.env.BARS || '0', 10); // 0 = use all cached bars
+
 function loadCache(sym) {
   const file = path.join(DATA_DIR, `${sym}-15m.json`);
   if (!fs.existsSync(file)) return null;
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-  return raw.map(r => ({
+  const rows = MAX_BARS > 0 ? raw.slice(-MAX_BARS) : raw;
+  return rows.map(r => ({
     t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4],
     v: +r[5], tb: +r[9], // field 9 = taker-buy base volume
   })).filter(b => Number.isFinite(b.c));
