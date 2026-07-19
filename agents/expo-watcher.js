@@ -181,6 +181,9 @@ const ENTRY_SYMBOLS = new Set(
 const POWER_GATE   = process.env.POWER_GATE !== '0';
 const POWER_TH     = Number(process.env.POWER_TH || 0.55);
 const POWER_LOW_TH = Number(process.env.POWER_LOW_TH || 0.35);
+// Label trades exit only on the reversal label (ride the full leg through
+// continuation). Sweep trades unaffected. Env EXPO_EXIT_REVERSAL_ONLY=0 to revert.
+const EXIT_REVERSAL_ONLY = process.env.EXPO_EXIT_REVERSAL_ONLY !== '0';
 const BINANCE_KLINES = 'https://fapi.binance.com/fapi/v1/klines';
 
 // Taker-buy ratio of ONE specific 15m bar. Used on the label's own pivot bar, which
@@ -256,7 +259,7 @@ async function closeExpoOnStructure(sym, labelType, labelTime) {
   try {
     const db = require('../db');
     rows = await db.query(
-      `SELECT id, created_at
+      `SELECT id, created_at, setup
        FROM trades
        WHERE symbol = $1
          AND direction = $2
@@ -275,6 +278,19 @@ async function closeExpoOnStructure(sym, labelType, labelTime) {
     return !openedAt || openedAt <= labelTime;
   });
   if (!eligible.length) return;
+
+  // LABEL trades ride the full leg: close only on the REVERSAL label (LONG→LH,
+  // SHORT→HL), holding through continuation (HH/LL). Backtest: +$7,024→+$7,681/90d,
+  // +$3,051→+$3,345/30d, avg win +25.9%→+36.2% (captures the big 1h legs the quick
+  // exit was missing). Sweep trades keep the continuation exit (it was a wash there).
+  // Env EXPO_EXIT_REVERSAL_ONLY=0 reverts label trades to exit-on-either.
+  const isSweep = eligible.some(t => String(t.setup || '').includes('[SWEEP]'));
+  const isContinuation = (exitDirection === 'LONG' && labelType === 'HH')
+                      || (exitDirection === 'SHORT' && labelType === 'LL');
+  if (EXIT_REVERSAL_ONLY && !isSweep && isContinuation) {
+    bLog(`[${sym}][15m] Expo ${labelType} — label ${exitDirection} rides the leg (continuation, not a reversal); no exit`);
+    return;
+  }
 
   structureExitSeen.add(exitKey);
   try {
