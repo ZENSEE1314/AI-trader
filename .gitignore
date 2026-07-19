@@ -14,3 +14,4 @@ unuse/
 logs*.txt
 railwaylogs.txt
 *temprailwaylogs*.txt
+data/backtest-cache/
