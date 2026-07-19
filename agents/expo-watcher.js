@@ -121,11 +121,13 @@ const TV_SYMBOLS   = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT
 const BYBIT_SYM    = { BTCUSDT: 'BTCUSDT', ETHUSDT: 'ETHUSDT', SOLUSDT: 'SOLUSDT' };
 const HISTORY_BARS = 300;
 // 1m-confirm window: if no 1m structure appears within it, the setup is missed and
-// we go back to waiting for the next fresh 15m label. 5 candles per owner
-// 2026-07-17 — a setup's edge decays fast, so later entries are worse: backtest
-// 90d 5c +$3,306 / 10c +$3,385 / 15c +$2,424 / 20c −$7,117; recent 30d 5c +$1,435
-// vs 10c +$335. Env ENTRY_WINDOW_MIN to change without a redeploy.
-const ENTRY_CONFIRM_MS = Number(process.env.ENTRY_WINDOW_MIN || 5) * 60 * 1000;
+// we go back to waiting for the next fresh 15m label. 8 min per owner 2026-07-17.
+// With power gated ONCE at the label, a longer window just gives the 1m pullback
+// more chances without quality loss — up to a point, then late entries hurt.
+// Backtest (BTC+SOL 50x two-wing, reversal exit): 5m +$7,681 / 8m +$8,511 /
+// 10m +$8,351 / 45m +$6,901 (90d); 30d 5m +$3,345, 8m +$3,342, 10m +$2,242.
+// 8m = the peak (best 90d, ties 5m on 30d). Env ENTRY_WINDOW_MIN to change.
+const ENTRY_CONFIRM_MS = Number(process.env.ENTRY_WINDOW_MIN || 8) * 60 * 1000;
 const WINDOW_MS    = ENTRY_CONFIRM_MS;     // entry window once a fresh Expo HL/LH appears
 const LABEL_MAX_AGE_MS = 45 * 60 * 1000;   // newborn label tradeable if its pivot bar is ≤3 bars old (V-bottoms confirm late)
 const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
