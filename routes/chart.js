@@ -683,3 +683,10 @@ router.get('/scan', async (req, res) => {
 });
 
 module.exports = router;
+// Expose the pure SMC compute functions so the MTF backtest can reuse the exact
+// same chart engine the site draws with (no logic drift). Attaching properties to
+// the router export is harmless — app.use() still receives the router function.
+module.exports.lib = {
+  fetchKlines, detectSwings, getStructureLabels, detectEQHEQL, calcCurvedBands, calcVWAP,
+  SWING_LENGTHS, STRUCTURE_PERIOD, CURVED_TREND_LENGTH, CURVED_MULTIPLIER,
+};

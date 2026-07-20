@@ -138,6 +138,7 @@ app.use('/api/wallet', walletRouter);
 // Start background deposit poller — checks Bitunix API every 30s for pending deposits
 walletRouter.startDepositPoller();
 app.use('/api/chart', require('./routes/chart'));
+app.use('/api/backtest-mtf', require('./routes/backtest-mtf'));
 app.use('/api/token-leverage', require('./routes/token-leverage'));
 app.use('/api/risk-levels', require('./routes/risk-levels'));
 app.use('/api/quantum', require('./routes/quantum'));
