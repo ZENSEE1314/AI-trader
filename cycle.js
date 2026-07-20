@@ -2105,7 +2105,7 @@ async function executeForAllUsers(pick) {
           if (memBlock && Date.now() < memBlock) {
             _openTradeInProgress.delete(openLockKey);
             const resumeStr = new Date(memBlock).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-            userLog.trade(`User ${key.email}: ${symbol} on 4h loss cooldown (in-memory) — resumes ${resumeStr}`);
+            userLog.trade(`User ${key.email}: ${symbol} on ${LOSS_COOLDOWN_HOURS}h loss cooldown (in-memory) — resumes ${resumeStr}`);
             return;
           }
           // DB check for a recent LOSS within the cooldown window (covers bot restarts)
