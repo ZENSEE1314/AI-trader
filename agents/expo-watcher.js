@@ -186,7 +186,27 @@ const POWER_LOW_TH = Number(process.env.POWER_LOW_TH || 0.35);
 // Label trades exit only on the reversal label (ride the full leg through
 // continuation). Sweep trades unaffected. Env EXPO_EXIT_REVERSAL_ONLY=0 to revert.
 const EXIT_REVERSAL_ONLY = process.env.EXPO_EXIT_REVERSAL_ONLY !== '0';
+// Quiet-pivot filter: block a label whose pivot bar had LOUD volume (>= this x its
+// 20-bar avg). Loser autopsy: losers averaged 1.23x pivot volume vs 0.93x for winners
+// (loud = initiative/continuation, not fadeable exhaustion). Blocking >=2.0x improves
+// BOTH windows: +$8,511->+$9,121/90d, +$3,342->+$3,568/30d. Env PIVOT_VOL_MAX=0 disables.
+const PIVOT_VOL_MAX = Number(process.env.PIVOT_VOL_MAX || 2.0);
 const BINANCE_KLINES = 'https://fapi.binance.com/fapi/v1/klines';
+
+// Volume of the label's pivot bar as a multiple of its 20-bar average (from Binance
+// 15m). Returns null if history is insufficient (fail open — don't block on no data).
+async function fetchPivotVolRatio(symbol, barTime) {
+  const start = barTime - 20 * 15 * 60000;
+  const url = `${BINANCE_KLINES}?symbol=${symbol}&interval=15m&startTime=${start}&limit=21`;
+  const res = await fetch(url, { timeout: 8000 });
+  const rows = await res.json();
+  if (!Array.isArray(rows) || rows.length < 21) return null;
+  const pivotIdx = rows.findIndex(r => +r[0] === barTime);
+  if (pivotIdx < 20) return null;
+  const vols = rows.map(r => parseFloat(r[5]));
+  const avg = vols.slice(pivotIdx - 20, pivotIdx).reduce((a, b) => a + b, 0) / 20;
+  return avg > 0 ? vols[pivotIdx] / avg : null;
+}
 
 // Taker-buy ratio of ONE specific 15m bar. Used on the label's own pivot bar, which
 // is already closed when the label appears — so the flow is complete and exact, with
@@ -406,6 +426,18 @@ function watch15m(client, ind, tvTicker) {
             return;
           }
           bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} power confirmed: ${side} ${pct}% (${rejected ? 'rejected on its bar' : 'aggressors trapped'})`);
+        }
+        // Quiet-pivot filter: a loud pivot bar is initiative volume (continuation),
+        // not fadeable exhaustion — the loser signature (1.23x avg vs 0.93x winners).
+        if (PIVOT_VOL_MAX > 0) {
+          let volRatio = null;
+          try { volRatio = await fetchPivotVolRatio(BYBIT_SYM[sym], newest.time); }
+          catch (_) { volRatio = null; }   // fail open — a fetch error shouldn't block
+          if (volRatio != null && volRatio >= PIVOT_VOL_MAX) {
+            delete biasMap[sym];
+            bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: pivot volume ${volRatio.toFixed(2)}x avg >= ${PIVOT_VOL_MAX}x — loud initiative bar, not exhaustion; no window`);
+            return;
+          }
         }
         // Newborn structure label + flow behind it → open the entry window now.
         biasMap[sym] = { direction: newest.dir, labelTime: newest.time, openedAt: Date.now(), traded: false };
