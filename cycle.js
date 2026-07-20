@@ -208,8 +208,13 @@ let lastBitunixSync = 0;
 // Resets to 0 on WIN. On 2nd consecutive LOSS, key is paused 4 hours.
 const _consecLosses = new Map(); // api_key_id → { count, lastLossAt }
 
-// Per-symbol loss cooldown: symbol loses → blocked 4h for that symbol specifically.
+// Per-symbol loss cooldown: symbol loses → blocked for that symbol specifically.
 // Key: `${userId}:${symbol}` → timestamp (ms) when block expires.
+// 1h (owner 2026-07-20, was 4h): joint backtest showed the full benefit lands at 1h
+// (both 1h and 0h = +$9,035/90d vs +$8,685 at 4h) — a fresh HL/LL after a loss often
+// recovers it — while 1h still blocks immediate revenge re-entry. Env LOSS_COOLDOWN_HOURS.
+const LOSS_COOLDOWN_HOURS = Number(process.env.LOSS_COOLDOWN_HOURS || 1);
+const LOSS_COOLDOWN_MS = LOSS_COOLDOWN_HOURS * 3600 * 1000;
 const _symbolLossCooldown = new Map();
 
 // Signal-type loss tracker: if same signal type loses twice on same symbol,
@@ -2103,20 +2108,20 @@ async function executeForAllUsers(pick) {
             userLog.trade(`User ${key.email}: ${symbol} on 4h loss cooldown (in-memory) — resumes ${resumeStr}`);
             return;
           }
-          // DB check for LOSS within last 4 hours (covers bot restarts)
+          // DB check for a recent LOSS within the cooldown window (covers bot restarts)
           const recentLoss = await db.query(
             `SELECT id, closed_at FROM trades
              WHERE user_id = $1 AND symbol = $2 AND status = 'LOSS'
-               AND closed_at > NOW() - INTERVAL '4 hours'
+               AND closed_at > $3
              ORDER BY closed_at DESC LIMIT 1`,
-            [key.user_id, symbol]
+            [key.user_id, symbol, new Date(Date.now() - LOSS_COOLDOWN_MS)]
           );
           if (recentLoss.length > 0) {
             _openTradeInProgress.delete(openLockKey);
-            const resumeAt = new Date(new Date(recentLoss[0].closed_at).getTime() + 4 * 3600 * 1000);
+            const resumeAt = new Date(new Date(recentLoss[0].closed_at).getTime() + LOSS_COOLDOWN_MS);
             _symbolLossCooldown.set(cooldownKey, resumeAt.getTime()); // cache in memory
             const resumeStr = resumeAt.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-            userLog.trade(`User ${key.email}: ${symbol} on 4h loss cooldown — resumes ${resumeStr}`);
+            userLog.trade(`User ${key.email}: ${symbol} on ${LOSS_COOLDOWN_HOURS}h loss cooldown — resumes ${resumeStr}`);
             return;
           }
         }
@@ -3968,15 +3973,15 @@ async function syncTradeStatus() {
                 // Reset consecutive-loss streak on win
                 _consecLosses.set(keyId, { count: 0, lastLossAt: 0 });
               } else {
-                // ── 1. Per-symbol 4h cooldown (new — was 2h any-close) ──
-                // Block this symbol from trading for 4 hours after a LOSS.
+                // ── 1. Per-symbol loss cooldown (LOSS_COOLDOWN_HOURS, default 1h) ──
+                // Block this symbol from trading briefly after a LOSS.
                 const cdKey     = `${trade.user_id}:${sym}`;
-                const cdExpires = now + 4 * 3600 * 1000;
+                const cdExpires = now + LOSS_COOLDOWN_MS;
                 _symbolLossCooldown.set(cdKey, cdExpires);
                 const cdStr = new Date(cdExpires).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-                bLog.trade(`[LOSS-CD] ${sym} blocked 4h for user ${trade.user_id} — resumes ${cdStr}`);
+                bLog.trade(`[LOSS-CD] ${sym} blocked ${LOSS_COOLDOWN_HOURS}h for user ${trade.user_id} — resumes ${cdStr}`);
                 await notify(
-                  `🔴 *${sym} Loss — 4h Cooldown*\n` +
+                  `🔴 *${sym} Loss — ${LOSS_COOLDOWN_HOURS}h Cooldown*\n` +
                   `Direction: ${dir} | PnL: \`$${pnlUsdt.toFixed(2)}\`\n` +
                   `${sym} will NOT trade again until ${cdStr}`
                 );
