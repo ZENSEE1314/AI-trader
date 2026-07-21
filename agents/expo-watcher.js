@@ -120,10 +120,11 @@ function persistLabels(sym, labels, periods) {
 // vs its pivot-bar time. If an HL/LH surfaces long after its bar — especially once a
 // newer HH/LL has already printed and superseded it — the label repaints and cannot
 // be traded live. This distinguishes "indicator is slow/repaints" from "parse bug".
-const _labelFirstSeen = {};   // sym → Map(key → firstSeenMs)
-const _diagReady = new Set();  // syms whose startup backlog has been recorded silently
-function diagLabelLag(sym, labels, periods) {
-  const seen = _labelFirstSeen[sym] || (_labelFirstSeen[sym] = new Map());
+const _labelFirstSeen = {};   // `${sym}:${tf}` → Map(key → firstSeenMs)
+const _diagReady = new Set();  // `${sym}:${tf}` keys whose startup backlog is recorded
+function diagLabelLag(sym, tf, labels, periods, onlyEntry = false) {
+  const mk = `${sym}:${tf}`;
+  const seen = _labelFirstSeen[mk] || (_labelFirstSeen[mk] = new Map());
   const now = Date.now();
   let newestT = 0, newestType = null;
   const cur = [];
@@ -135,21 +136,22 @@ function diagLabelLag(sym, labels, periods) {
     cur.push({ t, type: l.text });
     if (t > newestT) { newestT = t; newestType = l.text; }
   }
-  const first = !_diagReady.has(sym);
+  const first = !_diagReady.has(mk);
   for (const { t, type } of cur) {
     const key = `${t}:${type}`;
     if (seen.has(key)) continue;
     seen.set(key, now);
     if (first) continue;   // startup backlog — record silently, no lag to report
-    const lagMin = Math.round((now - t) / 60000);
+    if (onlyEntry && type !== 'HL' && type !== 'LH') continue;   // 1m: only entry labels
+    const lagMin = ((now - t) / 60000).toFixed(1);
     const sup = t < newestT
       ? `SUPERSEDED by ${newestType}@${new Date(newestT).toISOString().slice(11, 16)}`
       : 'is newest';
-    bLog(`[${sym}][15m][DIAG] new label ${type} @ ${new Date(t).toISOString().slice(0, 16)} — first-seen lag=${lagMin}m, ${sup}`);
+    bLog(`[${sym}][${tf}][DIAG] new label ${type} @ ${new Date(t).toISOString().slice(0, 16)} — first-seen lag=${lagMin}m, ${sup}`);
   }
   if (first) {
-    _diagReady.add(sym);
-    bLog(`[${sym}][15m][DIAG] baseline recorded (${cur.length} labels); now logging repaint lag for new labels`);
+    _diagReady.add(mk);
+    bLog(`[${sym}][${tf}][DIAG] baseline recorded (${cur.length} labels); now logging repaint lag for new labels`);
   }
   if (seen.size > 300) { const ks = [...seen.keys()]; for (const k of ks.slice(0, seen.size - 300)) seen.delete(k); }
 }
@@ -390,7 +392,7 @@ function watch15m(client, ind, tvTicker) {
       if (!labels.length || !periods.length) return;
 
       persistLabels(sym, labels, periods);   // keep the homepage backtest cache fresh
-      diagLabelLag(sym, labels, periods);    // DIAG: log repaint lag for each new label
+      diagLabelLag(sym, '15m', labels, periods);   // DIAG: log repaint lag for each new label
 
       // Most recent readable structure label (x != null = confirmed/positioned).
       // HH/LL must clear stale HL/LH bias, otherwise the 1m scanner can trade
@@ -524,6 +526,26 @@ function startDiagnostics(ind) {
     }
   }, 60_000);
 }
+// Observation-only 1m study: reads the SAME SMC Expo indicator on the 1-minute chart
+// and logs HL/LH first-seen lag via diagLabelLag. 1m labels form far more often than
+// 15m, so this answers the "does the Expo label repaint or is it real-time?" question
+// in minutes instead of hours. No trading, no exits — DIAG only. Env DIAG_1M=0 disables.
+function watchDiag1m(client, ind, tvTicker) {
+  const sym = normSym(tvTicker);
+  const chart = new client.Session.Chart();
+  chart.setMarket(tvTicker, { timeframe: '1', range: HISTORY_BARS });
+  const study = new chart.Study(ind);
+  study.onError((...e) => bLog(`[${sym}][1m] DIAG study error: ${e.join(' ')}`));
+  study.onUpdate(() => {
+    try {
+      const labels  = (study.graphic && study.graphic.labels) || [];
+      const periods = chart.periods || [];
+      if (!labels.length || !periods.length) return;
+      diagLabelLag(sym, '1m', labels, periods, true);   // onlyEntry: log HL/LH only
+    } catch (e) { bLog(`[${sym}][1m] DIAG error: ${e.message}`); }
+  });
+}
+
 function connectAll(ind) {
   if (_client) { try { _client.end(); } catch (_) {} }
   const client = new TradingView.Client({ token: process.env.TV_SESSION || '', signature: process.env.TV_SESSION_SIGN || '' });
@@ -532,10 +554,14 @@ function connectAll(ind) {
     bLog(`TV client error — reconnect 30s: ${e.join(' ')}`);
     setTimeout(() => connectAll(ind), 30_000);
   });
+  const diag1m = process.env.DIAG_1M !== '0';
   for (const tv of TV_SYMBOLS) {
     try { watch15m(client, ind, tv); } catch (e) { bLog(`[${normSym(tv)}][15m] watch failed: ${e.message}`); }
+    if (diag1m) {
+      try { watchDiag1m(client, ind, tv); } catch (e) { bLog(`[${normSym(tv)}][1m] DIAG watch failed: ${e.message}`); }
+    }
   }
-  bLog(`Watching ${TV_SYMBOLS.map(normSym).join('/')} on one TV client`);
+  bLog(`Watching ${TV_SYMBOLS.map(normSym).join('/')} on one TV client${diag1m ? ' (+1m DIAG)' : ''}`);
 }
 
 // ── 1m entry scan loop (native Bybit) ────────────────────────────
