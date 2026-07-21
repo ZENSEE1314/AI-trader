@@ -206,12 +206,13 @@ function biasAlive(sym) {
 
 // ── Which symbols may open LABEL entries ──────────────────────────
 // All TV_SYMBOLS stay watched (their labels drive structure EXITS for both this
-// strategy AND the sweep watcher) — but only these open entry windows. ETH is
-// excluded: the label strategy has no edge on it (best profit factor across ~25
-// power/leverage/SL/volume configs was 1.03, i.e. breakeven, and negative on the
-// recent 30d), while BTC/SOL run PF 2.2-3.5. Env: EXPO_ENTRY_SYMBOLS.
+// strategy AND the sweep watcher) — but only these open entry windows.
+// SOL-only (owner 2026-07-21): across 90d+30d windows BTC's label consistently
+// LOSES (−$1,128 / −$1,046) while SOL wins both (+$1,691 / +$1,475). ETH looks
+// strong (+$2,785/90d) but on a thin, historically-inconsistent sample — held out
+// pending multi-window validation. Env EXPO_ENTRY_SYMBOLS overrides this default.
 const ENTRY_SYMBOLS = new Set(
-  (process.env.EXPO_ENTRY_SYMBOLS || 'BTCUSDT,SOLUSDT').split(',').map(s => s.trim()).filter(Boolean)
+  (process.env.EXPO_ENTRY_SYMBOLS || 'SOLUSDT').split(',').map(s => s.trim()).filter(Boolean)
 );
 
 // ── Power-confirmation gate (evaluated ONCE, at the 15m label) ────
