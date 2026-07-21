@@ -2028,6 +2028,16 @@ router.get('/expo-labels', async (req, res) => {
   }
 });
 
+// Live in-memory Expo label repaint-lag measurements (not the frozen file cache).
+router.get('/diag-labels', (req, res) => {
+  try {
+    const { getDiagLog } = require('../agents/expo-watcher');
+    res.json({ diag: getDiagLog() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Futures wallet balances for ALL user exchange keys ────
 router.get('/wallet-balances', async (req, res) => {
   try {

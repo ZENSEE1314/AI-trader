@@ -122,6 +122,7 @@ function persistLabels(sym, labels, periods) {
 // be traded live. This distinguishes "indicator is slow/repaints" from "parse bug".
 const _labelFirstSeen = {};   // `${sym}:${tf}` → Map(key → firstSeenMs)
 const _diagReady = new Set();  // `${sym}:${tf}` keys whose startup backlog is recorded
+const _diagLog = [];           // ring buffer of measurements, exposed via /api/admin/diag-labels
 function diagLabelLag(sym, tf, labels, periods, onlyEntry = false) {
   const mk = `${sym}:${tf}`;
   const seen = _labelFirstSeen[mk] || (_labelFirstSeen[mk] = new Map());
@@ -144,10 +145,11 @@ function diagLabelLag(sym, tf, labels, periods, onlyEntry = false) {
     if (first) continue;   // startup backlog — record silently, no lag to report
     if (onlyEntry && type !== 'HL' && type !== 'LH') continue;   // 1m: only entry labels
     const lagMin = ((now - t) / 60000).toFixed(1);
-    const sup = t < newestT
-      ? `SUPERSEDED by ${newestType}@${new Date(newestT).toISOString().slice(11, 16)}`
-      : 'is newest';
+    const superseded = t < newestT ? `${newestType}@${new Date(newestT).toISOString().slice(11, 16)}` : null;
+    const sup = superseded ? `SUPERSEDED by ${superseded}` : 'is newest';
     bLog(`[${sym}][${tf}][DIAG] new label ${type} @ ${new Date(t).toISOString().slice(0, 16)} — first-seen lag=${lagMin}m, ${sup}`);
+    _diagLog.push({ at: now, sym, tf, type, labelTime: t, lagMin: Number(lagMin), superseded });
+    if (_diagLog.length > 300) _diagLog.shift();
   }
   if (first) {
     _diagReady.add(mk);
@@ -706,5 +708,13 @@ function getStatus() {
   };
 }
 
+function getDiagLog() {
+  return _diagLog.slice(-200).map(r => ({
+    ...r,
+    atISO: new Date(r.at).toISOString(),
+    labelISO: new Date(r.labelTime).toISOString().slice(0, 16),
+  }));
+}
+
 if (require.main === module) start().catch(console.error);
-module.exports = { start, getStatus };
+module.exports = { start, getStatus, getDiagLog };
