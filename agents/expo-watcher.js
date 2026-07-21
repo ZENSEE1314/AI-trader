@@ -115,6 +115,45 @@ function persistLabels(sym, labels, periods) {
   } catch (_) {}
 }
 
+// ── DIAG: measure Expo label repaint lag (owner 2026-07-21) ──────────────────
+// Records the wall-clock moment each HH/HL/LH/LL first appears in the live TV feed
+// vs its pivot-bar time. If an HL/LH surfaces long after its bar — especially once a
+// newer HH/LL has already printed and superseded it — the label repaints and cannot
+// be traded live. This distinguishes "indicator is slow/repaints" from "parse bug".
+const _labelFirstSeen = {};   // sym → Map(key → firstSeenMs)
+const _diagReady = new Set();  // syms whose startup backlog has been recorded silently
+function diagLabelLag(sym, labels, periods) {
+  const seen = _labelFirstSeen[sym] || (_labelFirstSeen[sym] = new Map());
+  const now = Date.now();
+  let newestT = 0, newestType = null;
+  const cur = [];
+  for (const l of labels) {
+    if (l.x == null || !/^(HH|HL|LH|LL)$/.test(l.text || '')) continue;
+    const bar = periods[l.x];
+    if (!bar) continue;
+    const t = bar.time * 1000;
+    cur.push({ t, type: l.text });
+    if (t > newestT) { newestT = t; newestType = l.text; }
+  }
+  const first = !_diagReady.has(sym);
+  for (const { t, type } of cur) {
+    const key = `${t}:${type}`;
+    if (seen.has(key)) continue;
+    seen.set(key, now);
+    if (first) continue;   // startup backlog — record silently, no lag to report
+    const lagMin = Math.round((now - t) / 60000);
+    const sup = t < newestT
+      ? `SUPERSEDED by ${newestType}@${new Date(newestT).toISOString().slice(11, 16)}`
+      : 'is newest';
+    bLog(`[${sym}][15m][DIAG] new label ${type} @ ${new Date(t).toISOString().slice(0, 16)} — first-seen lag=${lagMin}m, ${sup}`);
+  }
+  if (first) {
+    _diagReady.add(sym);
+    bLog(`[${sym}][15m][DIAG] baseline recorded (${cur.length} labels); now logging repaint lag for new labels`);
+  }
+  if (seen.size > 300) { const ks = [...seen.keys()]; for (const k of ks.slice(0, seen.size - 300)) seen.delete(k); }
+}
+
 // ── Config ───────────────────────────────────────────────────────
 const EXPO_ID      = 'PUB;26ae10374a9d4b0591b5b51a41356e57';   // Smart Money Concept (Expo)
 const TV_SYMBOLS   = ['BITUNIX:BTCUSDT.P', 'BITUNIX:ETHUSDT.P', 'BITUNIX:SOLUSDT.P'];
@@ -351,6 +390,7 @@ function watch15m(client, ind, tvTicker) {
       if (!labels.length || !periods.length) return;
 
       persistLabels(sym, labels, periods);   // keep the homepage backtest cache fresh
+      diagLabelLag(sym, labels, periods);    // DIAG: log repaint lag for each new label
 
       // Most recent readable structure label (x != null = confirmed/positioned).
       // HH/LL must clear stale HL/LH bias, otherwise the 1m scanner can trade
