@@ -26,7 +26,10 @@ const fetch = require('node-fetch');
 const bLog = (...a) => console.log('[Sweep-Watcher]', ...a);
 
 // ── Config ───────────────────────────────────────────────────────
-const SYMBOLS     = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+// SOL+ETH only (owner 2026-07-23): BTC loses on the sweep (−$83 to −$208/90d) —
+// dropped, same as it was dropped from the label. SOL is the sweep edge (+$155–461);
+// ETH is ~breakeven (+$10) and kept per owner. Env SWEEP_ENTRY_SYMBOLS overrides.
+const SYMBOLS     = (process.env.SWEEP_ENTRY_SYMBOLS || 'ETHUSDT,SOLUSDT').split(',').map(s => s.trim()).filter(Boolean);
 const SWING_LEN   = 10;                  // left-side pivot strength (matches Expo structure period)
 const CONFIRM     = 1;                   // right-side bars to confirm a pivot (fast, live-like)
 const VOL_TH      = Number(process.env.SWEEP_VOL_TH  || 0.8);   // sweep bar quieter than 0.8× avg(20)
