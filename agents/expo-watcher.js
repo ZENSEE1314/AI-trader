@@ -207,13 +207,14 @@ function biasAlive(sym) {
 // ── Which symbols may open LABEL entries ──────────────────────────
 // All TV_SYMBOLS stay watched (their labels drive structure EXITS for both this
 // strategy AND the sweep watcher) — but only these open entry windows.
-// SOL+ETH (owner 2026-07-21): BTC's label LOSES both windows (−$1,128 / −$1,046)
-// so it stays dropped. SOL wins both (+$1,691 / +$1,475). ETH re-enabled per owner
-// go-live decision — strong 90d (+$2,785, PF 2.40, 14 trades) but a thinner sample;
-// both run the proven engine (no require-sweep/COMBINED yet). Env EXPO_ENTRY_SYMBOLS
-// overrides. BTC still watched for exits.
+// SOL-only (owner 2026-07-24). BTC dropped 07-21: label loses both windows
+// (−$1,128 / −$1,046). ETH dropped 07-24: its +$2,785/90d backtest (14 trades)
+// did NOT hold live — 2 label shorts went +$2.5 then −$30 (net ≈ −$27 across
+// accounts), both counter-trend shorts into a rising ETH. SOL is the only coin
+// that wins in backtest (+$1,691 / +$1,475) AND live. Env EXPO_ENTRY_SYMBOLS
+// overrides. BTC/ETH still watched for exits.
 const ENTRY_SYMBOLS = new Set(
-  (process.env.EXPO_ENTRY_SYMBOLS || 'SOLUSDT,ETHUSDT').split(',').map(s => s.trim()).filter(Boolean)
+  (process.env.EXPO_ENTRY_SYMBOLS || 'SOLUSDT').split(',').map(s => s.trim()).filter(Boolean)
 );
 
 // ── Power-confirmation gate (evaluated ONCE, at the 15m label) ────
