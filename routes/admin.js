@@ -4730,4 +4730,25 @@ router.post('/sync-bitunix-all', async (req, res) => {
   }
 });
 
+// ── Trade forensics ──────────────────────────────────────────
+// GET /api/admin/trade-forensics?email=&days=60&symbol=ETHUSDT
+// Returns: open trades, a full trace of MANUAL / Trader-Mode trades (with a
+// "winner cut early" flag), losing trades + a 15m-structure-follow check, and a
+// same-signal cohort breakdown. Read-only. Admin-gated via adminOnly above.
+router.get('/trade-forensics', async (req, res) => {
+  try {
+    const { analyze } = require('../trade-forensics');
+    const result = await analyze({
+      email:       (req.query.email || '').trim(),
+      days:        req.query.days,
+      focusSymbol: (req.query.symbol || 'ETHUSDT'),
+      limit:       req.query.limit,
+    });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[ADMIN] /trade-forensics failed:', e.message);
+    res.status(500).json({ ok: false, error: 'Trade forensics failed', detail: e.message });
+  }
+});
+
 module.exports = router;
