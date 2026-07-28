@@ -4751,4 +4751,47 @@ router.get('/trade-forensics', async (req, res) => {
   }
 });
 
+// ── Deep per-trade analysis (klines-based) ───────────────────
+// GET /api/admin/trade-forensics/deep?email=&days=30&limit=8[&ids=1,2,3]
+// Reconstructs the multi-timeframe SMC context (4H EMA trend, 15m structure,
+// EQH/EQL, killzone timing, buying power) AT each trade's entry+exit and judges
+// whether the entry followed structure and the exit was premature. Heavier:
+// ~6 kline fetches per trade, so it's capped and opt-in. Pass ids= to target
+// specific trades (e.g. the ETH one). Read-only.
+router.get('/trade-forensics/deep', async (req, res) => {
+  try {
+    const { deepAnalyzeTrades } = require('../trade-deep-analysis');
+    const clamp = (v, lo, hi, def) => Math.max(lo, Math.min(hi, parseInt(v, 10) || def));
+    const email = (req.query.email || '').trim();
+    const days  = clamp(req.query.days, 1, 365, 30);
+    const limit = clamp(req.query.limit, 1, 20, 8);
+    const ids   = String(req.query.ids || '').split(',').map(s => parseInt(s, 10)).filter(Boolean);
+
+    let rows;
+    if (ids.length) {
+      rows = await query(
+        `SELECT t.*, u.email FROM trades t LEFT JOIN users u ON u.id = t.user_id
+          WHERE t.id = ANY($1) ORDER BY COALESCE(t.closed_at, t.created_at) DESC`, [ids]);
+    } else {
+      const params = [String(days)];
+      let ef = '';
+      if (email) { params.push(email); ef = `AND LOWER(u.email) = LOWER($${params.length})`; }
+      rows = await query(
+        `SELECT t.*, u.email FROM trades t LEFT JOIN users u ON u.id = t.user_id
+          WHERE COALESCE(t.closed_at, t.created_at) > NOW() - ($1::text || ' days')::interval
+            AND ( UPPER(COALESCE(t.setup,'')) = 'MANUAL'
+                  OR UPPER(COALESCE(t.market_structure,'')) = 'TRADER_MODE'
+                  OR t.exit_reason ~* 'expo_structure|structure_break|reversal' )
+            ${ef}
+          ORDER BY COALESCE(t.closed_at, t.created_at) DESC LIMIT ${limit * 2}`, params);
+    }
+
+    const trades = await deepAnalyzeTrades(rows, { limit });
+    res.json({ ok: true, count: trades.length, trades, note: 'MTF context reconstructed from Bybit klines at trade time' });
+  } catch (e) {
+    console.error('[ADMIN] /trade-forensics/deep failed:', e.message);
+    res.status(500).json({ ok: false, error: 'Deep analysis failed', detail: e.message });
+  }
+});
+
 module.exports = router;
