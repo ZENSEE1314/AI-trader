@@ -4681,6 +4681,23 @@ async function processTraderModeKeys() {
 // After close, the new signal is opened immediately (no post-close cooldown applied).
 //
 // Returns true if at least one position was closed successfully.
+//
+// Manual-trade safety: this closer keys off the BOT's open trade rows only, and
+// when a manual / Trader-Mode position shares the same exchange position it
+// closes ONLY the bot's quantity (partial reduce) so the user's manual trade is
+// never swept out. See closeExpoOnStructure() in agents/expo-watcher.js.
+
+// Floor `qty` to the number of decimals present in `refStr` (a live position's
+// qty string) so a partial-close order carries valid exchange precision and
+// never rounds UP past the intended size.
+function matchQtyDecimals(qty, refStr) {
+  const s = String(refStr ?? '');
+  const dot = s.indexOf('.');
+  const dec = dot >= 0 ? (s.length - dot - 1) : 0;
+  const f = Math.pow(10, Math.min(dec, 8));
+  return Math.floor(qty * f) / f;
+}
+
 async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
   const sym = symbol.toUpperCase();
   let db, cryptoUtils, BitunixClient;
@@ -4696,19 +4713,37 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
   bLog.trade(`[CLOSE-REVERSAL] Closing ${sym} — reason: ${reason}`);
   let anyClosed = false;
 
+  // Only act on keys that have at least one BOT-opened trade for this symbol.
+  // Manual / Trader-Mode positions net into the same exchange position, so we
+  // also carry each key's bot quantity (bot_qty) and whether a manual/Trader-Mode
+  // trade coexists (manual_count) — used below to avoid closing the user's own
+  // manual trade. "Manual" == Trader-Mode inserts: setup='MANUAL' or
+  // market_structure='TRADER_MODE' (see processTraderModeKeys).
   const keys = await db.query(`
-    SELECT DISTINCT ak.id, ak.platform, ak.user_id,
+    SELECT ak.id, ak.platform, ak.user_id,
            ak.api_key_enc, ak.iv, ak.auth_tag,
            ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
-           u.email
+           u.email,
+           COALESCE(SUM(
+             CASE WHEN NOT (COALESCE(t.setup, '') = 'MANUAL' OR COALESCE(t.market_structure, '') = 'TRADER_MODE')
+                  THEN ABS(COALESCE(t.quantity, 0)) ELSE 0 END
+           ), 0) AS bot_qty,
+           COUNT(*) FILTER (
+             WHERE COALESCE(t.setup, '') = 'MANUAL' OR COALESCE(t.market_structure, '') = 'TRADER_MODE'
+           ) AS manual_count
     FROM api_keys ak
     JOIN users u ON u.id = ak.user_id
     JOIN trades t ON t.api_key_id = ak.id
     WHERE t.symbol = $1 AND t.status = 'OPEN'
+    GROUP BY ak.id, ak.platform, ak.user_id, ak.api_key_enc, ak.iv, ak.auth_tag,
+             ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag, u.email
+    HAVING COUNT(*) FILTER (
+      WHERE NOT (COALESCE(t.setup, '') = 'MANUAL' OR COALESCE(t.market_structure, '') = 'TRADER_MODE')
+    ) > 0
   `, [sym]).catch(() => []);
 
   if (!keys.length) {
-    bLog.trade(`[CLOSE-REVERSAL] ${sym}: no open DB trade keys found`);
+    bLog.trade(`[CLOSE-REVERSAL] ${sym}: no open bot-trade keys found (manual-only positions are left untouched)`);
   }
 
   for (const key of keys) {
@@ -4733,9 +4768,9 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
           continue;
         }
 
-        const rawQty = parseFloat(pos.qty || pos.size || pos.positionAmt || 0);
-        const qty    = Math.abs(rawQty);
-        if (qty === 0) continue;
+        const rawQty  = parseFloat(pos.qty || pos.size || pos.positionAmt || 0);
+        const liveQty = Math.abs(rawQty);
+        if (liveQty === 0) continue;
 
         const sideText = (pos.side || '').toUpperCase();
         const isLong = sideText
@@ -4743,25 +4778,56 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
           : rawQty > 0;
         const posId  = pos.positionId || pos.id;
 
-        // Use flashClose (single-call full close) — falls back to closePosition
-        let closed = false;
-        if (posId) {
-          try {
-            await client.flashClose({ positionId: posId });
-            closed = true;
-          } catch (flashErr) {
-            bLog.trade(`[CLOSE-REVERSAL] ${sym}: flashClose failed for ${key.email || key.id}, falling back: ${flashErr.message}`);
-          }
-        }
-        if (!closed) {
-          await client.closePosition({ symbol: sym, side: isLong ? 'BUY' : 'SELL', qty, positionId: posId });
-          closed = true;
+        // Manual-trade protection. Bitunix nets bot + manual size into ONE
+        // position, so flash-closing it would take the user's manual trade with
+        // it. If a manual/Trader-Mode trade coexists (explicit DB row, or live
+        // size exceeds the bot's tracked size), close ONLY the bot's slice.
+        const botQty        = Math.abs(parseFloat(key.bot_qty) || 0);
+        const manualPresent = Number(key.manual_count) > 0 || liveQty > botQty * 1.02;
+        if (manualPresent && !(botQty > 0 && botQty < liveQty)) {
+          bLog.trade(`[CLOSE-REVERSAL] ${sym}: manual/Trader-Mode position present for ${key.email || key.id}; bot slice unresolvable (botQty=${botQty}, liveQty=${liveQty}) — skipping to protect the manual trade`);
+          await notify(
+            `⚠️ *${sym}* structure-exit skipped for ${key.email || key.id}\n` +
+            `A manual position is present and the bot slice couldn't be sized — left untouched.\n` +
+            `Close the bot leg manually if needed.`
+          ).catch(() => {});
+          continue;
         }
 
-        // Mark DB trade closed — syncTradeStatus will fill in exit price and PnL
+        let closed = false;
+        if (manualPresent) {
+          // Partial reduce — leave the user's manual size on the exchange.
+          const closeQty = matchQtyDecimals(Math.min(botQty, liveQty), pos.qty || pos.size || pos.positionAmt || liveQty);
+          if (!(closeQty > 0)) {
+            bLog.trade(`[CLOSE-REVERSAL] ${sym}: manual position present, computed bot closeQty=0 for ${key.email || key.id} — skipping`);
+            continue;
+          }
+          await client.closePosition({ symbol: sym, side: isLong ? 'BUY' : 'SELL', qty: closeQty, positionId: posId });
+          closed = true;
+          bLog.trade(`[CLOSE-REVERSAL] ${sym}: partial close ${closeQty}/${liveQty} (bot slice) — manual position preserved for ${key.email || key.id}`);
+        } else {
+          // No manual position on this account — full close (flashClose, then
+          // fall back to a full closePosition order).
+          if (posId) {
+            try {
+              await client.flashClose({ positionId: posId });
+              closed = true;
+            } catch (flashErr) {
+              bLog.trade(`[CLOSE-REVERSAL] ${sym}: flashClose failed for ${key.email || key.id}, falling back: ${flashErr.message}`);
+            }
+          }
+          if (!closed) {
+            await client.closePosition({ symbol: sym, side: isLong ? 'BUY' : 'SELL', qty: liveQty, positionId: posId });
+            closed = true;
+          }
+        }
+
+        // Mark only BOT trade rows closed — never flip manual / Trader-Mode rows.
+        // syncTradeStatus fills in exit price and PnL.
         await db.query(
           `UPDATE trades SET status = 'CLOSED', exit_reason = $1, closed_at = NOW()
-           WHERE symbol = $2 AND status = 'OPEN' AND api_key_id = $3`,
+           WHERE symbol = $2 AND status = 'OPEN' AND api_key_id = $3
+             AND NOT (COALESCE(setup, '') = 'MANUAL' OR COALESCE(market_structure, '') = 'TRADER_MODE')`,
           [reason, sym, key.id]
         ).catch(() => {});
 
@@ -4788,18 +4854,46 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
         if (!openPos) continue;
 
         const amt       = parseFloat(openPos.positionAmt || 0);
+        const liveQty   = Math.abs(amt);
         const isLong    = amt > 0;
         const closeSide = isLong ? 'SELL' : 'BUY';
 
-        try { await bnClient.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+        // Manual-trade protection (see Bitunix branch above). Close only the
+        // bot's slice when a manual/Trader-Mode position coexists, and DON'T
+        // cancel resting orders in that case — they may be the manual trade's
+        // SL/TP.
+        const botQty        = Math.abs(parseFloat(key.bot_qty) || 0);
+        const manualPresent = Number(key.manual_count) > 0 || liveQty > botQty * 1.02;
+        if (manualPresent && !(botQty > 0 && botQty < liveQty)) {
+          bLog.trade(`[CLOSE-REVERSAL] ${sym}: manual/Trader-Mode position present for ${key.email || key.id}; bot slice unresolvable (botQty=${botQty}, liveQty=${liveQty}) — skipping to protect the manual trade`);
+          await notify(
+            `⚠️ *${sym}* structure-exit skipped for ${key.email || key.id}\n` +
+            `A manual position is present and the bot slice couldn't be sized — left untouched.`
+          ).catch(() => {});
+          continue;
+        }
+
+        let closeQty = liveQty;
+        if (manualPresent) {
+          closeQty = matchQtyDecimals(Math.min(botQty, liveQty), openPos.positionAmt || liveQty);
+          if (!(closeQty > 0)) {
+            bLog.trade(`[CLOSE-REVERSAL] ${sym}: manual position present, computed bot closeQty=0 for ${key.email || key.id} — skipping`);
+            continue;
+          }
+          bLog.trade(`[CLOSE-REVERSAL] ${sym}: Binance partial close ${closeQty}/${liveQty} (bot slice) — manual position preserved for ${key.email || key.id}`);
+        } else {
+          // Full close — safe to clear resting orders too.
+          try { await bnClient.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+        }
         await bnClient.submitNewOrder({
           symbol, side: closeSide, type: 'MARKET',
-          quantity: Math.abs(amt), reduceOnly: 'true',
+          quantity: closeQty, reduceOnly: 'true',
         });
 
         await db.query(
           `UPDATE trades SET status = 'CLOSED', exit_reason = $1, closed_at = NOW()
-           WHERE symbol = $2 AND status = 'OPEN' AND api_key_id = $3`,
+           WHERE symbol = $2 AND status = 'OPEN' AND api_key_id = $3
+             AND NOT (COALESCE(setup, '') = 'MANUAL' OR COALESCE(market_structure, '') = 'TRADER_MODE')`,
           [reason, sym, key.id]
         ).catch(() => {});
 
