@@ -4698,6 +4698,24 @@ function matchQtyDecimals(qty, refStr) {
   return Math.floor(qty * f) / f;
 }
 
+// Symbols the bot is still allowed to send exits on. A symbol dropped from BOTH
+// the label (EXPO_ENTRY_SYMBOLS) and sweep (SWEEP_ENTRY_SYMBOLS) entry sets no
+// longer has the bot opening positions, so on Bitunix the bot must not send
+// close orders on it either — any leftover/manual position is left for its hard
+// SL or the user to manage. Mirrors the entry-set defaults in
+// agents/expo-watcher.js + agents/sweep-watcher.js.
+function entryEnabledSymbols() {
+  const parse = v => (v || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  return new Set([
+    ...parse(process.env.EXPO_ENTRY_SYMBOLS  || 'SOLUSDT'),
+    ...parse(process.env.SWEEP_ENTRY_SYMBOLS || 'SOLUSDT'),
+  ]);
+}
+
+// Guard: on Bitunix, only close symbols that are still entry-enabled. Set
+// BITUNIX_EXIT_ALL_SYMBOLS=1 to restore closing every watched symbol.
+const BITUNIX_EXIT_ENTRY_ONLY = process.env.BITUNIX_EXIT_ALL_SYMBOLS !== '1';
+
 async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
   const sym = symbol.toUpperCase();
   let db, cryptoUtils, BitunixClient;
@@ -4712,6 +4730,11 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
 
   bLog.trade(`[CLOSE-REVERSAL] Closing ${sym} — reason: ${reason}`);
   let anyClosed = false;
+
+  // Bitunix exit guard: skip symbols that are no longer entry-enabled (see
+  // BITUNIX_EXIT_ENTRY_ONLY). Only affects the Bitunix branch below.
+  const entryEnabled = entryEnabledSymbols();
+  const skipBitunixExit = BITUNIX_EXIT_ENTRY_ONLY && !entryEnabled.has(sym);
 
   // Only act on keys that have at least one BOT-opened trade for this symbol.
   // Manual / Trader-Mode positions net into the same exchange position, so we
@@ -4753,6 +4776,10 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
       if (!apiKey || !apiSecret) continue;
 
       if (key.platform === 'bitunix') {
+        if (skipBitunixExit) {
+          bLog.trade(`[CLOSE-REVERSAL] ${sym}: entry-disabled on Bitunix — skipping bot exit for ${key.email || key.id} (leftover/manual positions left untouched; set BITUNIX_EXIT_ALL_SYMBOLS=1 to override)`);
+          continue;
+        }
         const client = new BitunixClient({ apiKey, apiSecret });
         const posRaw = await client.getOpenPositions(sym).catch(() => []);
         const posArr = Array.isArray(posRaw) ? posRaw
