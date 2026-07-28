@@ -71,6 +71,31 @@ function structureLabelFor(t) {
   return t.tf_15m || structureAt(t.symbol, +new Date(t.created_at))?.type || null;
 }
 
+// The structure label (HH/HL/LH/LL) the bot exited on — parsed from exit_reason
+// (e.g. 'expo_structure_HH'). null if the exit wasn't a labelled structure exit.
+function exitLabel(reason) {
+  // Labels are appended as a suffix (e.g. 'expo_structure_HH'); underscores are
+  // word chars so \b doesn't help — match the token not followed by a letter,
+  // and take the last such match.
+  const m = String(reason || '').toUpperCase().match(/(HH|HL|LH|LL)(?![A-Z])/g);
+  return m ? m[m.length - 1] : null;
+}
+
+// Classify a structure exit relative to trade direction:
+//   CONTINUATION = same-direction structure kept going → cutting here is premature.
+//     LONG exits on HH, SHORT exits on LL.
+//   REVERSAL = structure flipped against the trade → a legit exit.
+//     LONG exits on LH, SHORT exits on HL.
+// This is exactly the distinction expo-watcher's EXIT_REVERSAL_ONLY encodes;
+// here we measure how often the *closer* actually cut on a continuation.
+function exitClass(direction, label) {
+  if (!label) return null;
+  const dir = String(direction || '').toUpperCase();
+  if (dir === 'LONG')  return label === 'HH' ? 'continuation' : label === 'LH' ? 'reversal' : 'other';
+  if (dir === 'SHORT') return label === 'LL' ? 'continuation' : label === 'HL' ? 'reversal' : 'other';
+  return null;
+}
+
 // Common enrichment applied to every returned row.
 function enrich(t) {
   const label = structureLabelFor(t);
@@ -165,6 +190,40 @@ async function analyze({ email = '', days = 60, focusSymbol = 'ETHUSDT', limit =
        ORDER BY COALESCE(t.closed_at, t.created_at) DESC LIMIT ${cap}`, peerParams);
   }
 
+  // 5. EXIT QUALITY — how often did a bot STRUCTURE exit cut on a continuation
+  //    (premature) vs a reversal (legit)? This is the recurring-pattern check:
+  //    "does the bot frequently cut winners against the ongoing structure?"
+  const eqParams = [D];
+  const botExits = await query(
+    `${base} WHERE t.status IN ('WIN','LOSS','TP','SL','CLOSED')
+       AND t.exit_reason ~* 'expo_structure|structure_break'
+       AND COALESCE(t.closed_at, t.created_at) > NOW() - ($1::text || ' days')::interval
+       ${emailClause(em, eqParams)}
+     ORDER BY COALESCE(t.closed_at, t.created_at) DESC LIMIT ${cap}`, eqParams);
+
+  const exits = botExits.map(t => {
+    const label = exitLabel(t.exit_reason);
+    const klass = exitClass(t.direction, label);
+    return {
+      id: t.id, symbol: t.symbol, direction: t.direction,
+      pnl_usdt: t.pnl_usdt == null ? null : Number(t.pnl_usdt),
+      exit_reason: t.exit_reason, exit_label: label, exit_class: klass,
+      premature: klass === 'continuation',
+      winner_cut: klass === 'continuation' && Number(t.pnl_usdt) > 0,
+      closed_at: t.closed_at,
+    };
+  });
+  const contCuts   = exits.filter(e => e.exit_class === 'continuation');
+  const winnerCuts = contCuts.filter(e => Number(e.pnl_usdt) > 0);
+  const bySymbolDir = {};
+  for (const e of exits) {
+    const k = `${e.symbol} ${e.direction}`;
+    const b = bySymbolDir[k] || (bySymbolDir[k] = { symbol: e.symbol, direction: e.direction, structure_exits: 0, continuation_cuts: 0, winners_cut: 0 });
+    b.structure_exits++;
+    if (e.exit_class === 'continuation') b.continuation_cuts++;
+    if (e.winner_cut) b.winners_cut++;
+  }
+
   const losers = loserRows.map(enrich);
   const against = losers.filter(l => l.follows_structure === false).length;
 
@@ -186,6 +245,16 @@ async function analyze({ email = '', days = 60, focusSymbol = 'ETHUSDT', limit =
     peers: peers.map(enrich),
     winners_cut_early: manual.filter(t => Number(t.pnl_usdt) > 0 && BOT_EXIT.test(String(t.exit_reason || '')))
       .map(t => ({ id: t.id, symbol: t.symbol, direction: t.direction, pnl_usdt: Number(t.pnl_usdt), exit_reason: t.exit_reason })),
+    exit_quality: {
+      structure_exits: exits.length,
+      continuation_cuts: contCuts.length,
+      reversal_exits: exits.filter(e => e.exit_class === 'reversal').length,
+      winners_cut_on_continuation: winnerCuts.length,
+      pct_premature: exits.length ? Number((contCuts.length / exits.length * 100).toFixed(1)) : 0,
+      pct_winners_cut: contCuts.length ? Number((winnerCuts.length / contCuts.length * 100).toFixed(1)) : 0,
+      by_symbol_direction: Object.values(bySymbolDir).sort((a, b) => b.continuation_cuts - a.continuation_cuts),
+      examples: exits.slice(0, 25),
+    },
     generated_at: new Date().toISOString(),
   };
 }

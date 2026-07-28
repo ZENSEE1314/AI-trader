@@ -86,6 +86,20 @@ async function main() {
     }
   }
 
+  hr(`5. EXIT QUALITY — premature (continuation) vs reversal structure exits (last ${DAYS}d)`);
+  const eq = r.exit_quality;
+  console.log(`Structure exits: ${eq.structure_exits} | continuation-cuts (premature): ${eq.continuation_cuts} (${pct(eq.pct_premature)})`
+    + ` | reversal (legit): ${eq.reversal_exits} | winners cut on continuation: ${eq.winners_cut_on_continuation} (${pct(eq.pct_winners_cut)} of cuts)`);
+  if (eq.by_symbol_direction.length) {
+    console.log('\nBy symbol + direction (most premature cuts first):');
+    for (const b of eq.by_symbol_direction) {
+      console.log(`  ${b.symbol} ${b.direction} | structure-exits ${b.structure_exits} | continuation-cuts ${b.continuation_cuts} | winners cut ${b.winners_cut}`);
+    }
+  }
+  for (const e of eq.examples.filter(e => e.premature)) {
+    console.log(`  ⚠️ #${e.id} ${e.symbol} ${e.direction} cut on ${e.exit_label} (continuation) | PnL ${money(e.pnl_usdt)}${Number(e.pnl_usdt) > 0 ? ' — WINNER' : ''}`);
+  }
+
   if (r.winners_cut_early.length) {
     hr('SUMMARY: winners the bot cut early');
     for (const w of r.winners_cut_early) {
