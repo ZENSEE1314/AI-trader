@@ -4731,10 +4731,12 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
   bLog.trade(`[CLOSE-REVERSAL] Closing ${sym} — reason: ${reason}`);
   let anyClosed = false;
 
-  // Bitunix exit guard: skip symbols that are no longer entry-enabled (see
-  // BITUNIX_EXIT_ENTRY_ONLY). Only affects the Bitunix branch below.
+  // Bitunix exit guard: for symbols no longer entry-enabled, leave the position
+  // untouched ONLY when a manual position shares it (checked per-key below). A
+  // bot-only position on an entry-disabled symbol is still closed normally.
+  // See BITUNIX_EXIT_ENTRY_ONLY.
   const entryEnabled = entryEnabledSymbols();
-  const skipBitunixExit = BITUNIX_EXIT_ENTRY_ONLY && !entryEnabled.has(sym);
+  const bitunixExitDisabledForSym = BITUNIX_EXIT_ENTRY_ONLY && !entryEnabled.has(sym);
 
   // Only act on keys that have at least one BOT-opened trade for this symbol.
   // Manual / Trader-Mode positions net into the same exchange position, so we
@@ -4776,10 +4778,6 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
       if (!apiKey || !apiSecret) continue;
 
       if (key.platform === 'bitunix') {
-        if (skipBitunixExit) {
-          bLog.trade(`[CLOSE-REVERSAL] ${sym}: entry-disabled on Bitunix — skipping bot exit for ${key.email || key.id} (leftover/manual positions left untouched; set BITUNIX_EXIT_ALL_SYMBOLS=1 to override)`);
-          continue;
-        }
         const client = new BitunixClient({ apiKey, apiSecret });
         const posRaw = await client.getOpenPositions(sym).catch(() => []);
         const posArr = Array.isArray(posRaw) ? posRaw
@@ -4811,6 +4809,21 @@ async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
         // size exceeds the bot's tracked size), close ONLY the bot's slice.
         const botQty        = Math.abs(parseFloat(key.bot_qty) || 0);
         const manualPresent = Number(key.manual_count) > 0 || liveQty > botQty * 1.02;
+
+        // Entry-disabled guard, scoped to manual coexistence: if the symbol is no
+        // longer entry-enabled AND a manual position shares this exchange
+        // position, leave the whole thing untouched — the bot isn't trading this
+        // symbol, so it shouldn't disturb the user's trade even for a partial
+        // reduce. (A bot-only position here still closes normally below.)
+        if (manualPresent && bitunixExitDisabledForSym) {
+          bLog.trade(`[CLOSE-REVERSAL] ${sym}: entry-disabled on Bitunix with a manual position present for ${key.email || key.id} — leaving position untouched (set BITUNIX_EXIT_ALL_SYMBOLS=1 to override)`);
+          await notify(
+            `⚠️ *${sym}* structure-exit skipped for ${key.email || key.id}\n` +
+            `Symbol is entry-disabled and a manual position is present — left untouched.`
+          ).catch(() => {});
+          continue;
+        }
+
         if (manualPresent && !(botQty > 0 && botQty < liveQty)) {
           bLog.trade(`[CLOSE-REVERSAL] ${sym}: manual/Trader-Mode position present for ${key.email || key.id}; bot slice unresolvable (botQty=${botQty}, liveQty=${liveQty}) — skipping to protect the manual trade`);
           await notify(
