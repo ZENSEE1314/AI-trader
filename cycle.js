@@ -1610,6 +1610,24 @@ async function main() {
         continue;
       }
 
+      // ── ENTRY GUARDS (structure/liquidity) — env-gated, default OFF ──
+      // Blocks counter-trend entries and entries INTO resting liquidity (the two
+      // patterns behind the 30d losing book). Inert unless ENTRY_GUARDS_ENABLED=1;
+      // TV override bypasses it; fails OPEN on any error. Backtest before enabling.
+      if (process.env.ENTRY_GUARDS_ENABLED === '1'
+          && !(pick.source === 'tradingview' && pick.override === true)) {
+        try {
+          const { evaluateEntry } = require('./entry-guards');
+          const guard = await evaluateEntry({ symbol: pick.symbol || pick.sym, direction: pick.direction });
+          if (!guard.allow) {
+            bLog.trade(`GUARD-BLOCK: ${pick.symbol} ${pick.direction} — ${guard.reason}`);
+            continue;
+          }
+        } catch (e) {
+          bLog.error(`entry-guard error (fail-open, trade allowed): ${e.message}`);
+        }
+      }
+
       // ── TradingView MANUAL OVERRIDE ────────────────────────────
       // If user sends override=true from TV webhook, bypass ALL gates
       // and execute immediately. Log it loud for audit trail.
