@@ -51,11 +51,12 @@ setInterval(cleanBotLogs, 6 * 60 * 60 * 1000); // every 6 hours
   }
 })();
 
-// Start EQ-Sweep watcher — liquidity-sweep reversals (BTC/ETH/SOL), native 15m
-// pivots + Binance flow gates, 20x, structure exits. Disable with SWEEP_WATCHER=0.
+// EQ-Sweep watcher — DISABLED by default (owner 2026-07-24). SOL runs label-only:
+// the sweep + label sharing one SOL slot backtested to −$221 (vs label-alone +$1,691)
+// and caused live whipsaws + fee drag. Re-enable with SWEEP_WATCHER=1.
 (async () => {
-  if (process.env.SWEEP_WATCHER === '0') {
-    console.log('[SERVER] EQ-Sweep watcher disabled via SWEEP_WATCHER=0');
+  if (process.env.SWEEP_WATCHER !== '1') {
+    console.log('[SERVER] EQ-Sweep watcher OFF (default). SOL is label-only. Set SWEEP_WATCHER=1 to re-enable.');
     return;
   }
   try {
