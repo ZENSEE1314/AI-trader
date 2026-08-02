@@ -3093,6 +3093,7 @@ async function syncTradeStatus() {
           // ── Swarm-based Dynamic Exit ─────────────────────────────────────
           // Check if the swarm consensus has shifted against our positions
           for (const trade of trades) {
+            if (isTraderManualTrade(trade)) continue; // never manage manual/Trader-Mode positions
             const exchangePos = openSymbols.get(posKey(trade.symbol, trade.direction || 'LONG'));
             if (exchangePos) {
               try {
@@ -3156,6 +3157,7 @@ async function syncTradeStatus() {
 
           // Check trailing SL for open positions
           for (const trade of trades) {
+            if (isTraderManualTrade(trade)) continue; // never manage manual/Trader-Mode positions
             const exchangePos = openSymbols.get(posKey(trade.symbol, trade.direction || 'LONG'));
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
@@ -3429,6 +3431,12 @@ async function syncTradeStatus() {
           // Check trailing SL for Bitunix positions (self-healing)
           bLog.system(`Bitunix trailing SL: checking ${trades.length} trade(s), ${openSymbols.size} live position(s): [${[...openSymbols.keys()].join(',')}]`);
           for (const trade of trades) {
+            // Trader Mode: never manage the user's own manual positions (no TP
+            // scale-out, no trailing, no close) — the trader runs their own exits.
+            if (isTraderManualTrade(trade)) {
+              bLog.system(`Bitunix: ${trade.symbol} is a manual/Trader-Mode position — bot leaves exits to the trader`);
+              continue;
+            }
             const tradeDir = trade.direction || 'LONG';
             const exchangePos = openSymbols.get(posKey(trade.symbol, tradeDir));
             if (!exchangePos) {
@@ -4704,6 +4712,15 @@ async function processTraderModeKeys() {
 // when a manual / Trader-Mode position shares the same exchange position it
 // closes ONLY the bot's quantity (partial reduce) so the user's manual trade is
 // never swept out. See closeExpoOnStructure() in agents/expo-watcher.js.
+
+// A position the user opened themselves (Trader Mode). The bot mirrors these to
+// followers but must NEVER manage their exits — no TP scale-out, no trailing SL,
+// no structure/swarm close. The trader runs their own exits; the bot only
+// reconciles status/PnL. Used to skip bot-side management in syncTradeStatus.
+function isTraderManualTrade(trade) {
+  return String(trade.setup || '').toUpperCase() === 'MANUAL'
+      || String(trade.market_structure || '').toUpperCase() === 'TRADER_MODE';
+}
 
 // Floor `qty` to the number of decimals present in `refStr` (a live position's
 // qty string) so a partial-close order carries valid exchange precision and
