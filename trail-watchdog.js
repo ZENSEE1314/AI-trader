@@ -74,6 +74,14 @@ function isExpoSetup(setup) {
   return String(setup || '').startsWith('EXPO_BASELINE');
 }
 
+// A position the trader opened themselves (Trader Mode). The watchdog must NEVER
+// manage its exits — no TP scale-out, no trailing, no SL. The trader runs their
+// own exits; the bot only mirrors entries to followers.
+function isTraderManual(t) {
+  return String(t?.setup || '').toUpperCase() === 'MANUAL'
+      || String(t?.market_structure || '').toUpperCase() === 'TRADER_MODE';
+}
+
 // Cache funding rates to avoid hammering Binance every 15s
 const fundingRateCache = new Map(); // symbol → { rate, fetchedAt }
 const FUNDING_CACHE_TTL = 5 * 60 * 1000; // refresh every 5 minutes
@@ -289,7 +297,7 @@ async function runTrailCycle() {
     const dbTrades = await db.query(`
       SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price, t.quantity,
              t.trailing_sl_price, t.tp_price, t.leverage, t.api_key_id, t.setup,
-             t.smc_tp1_hit
+             t.market_structure, t.smc_tp1_hit
       FROM trades t
       WHERE t.status = 'OPEN'
     `);
@@ -403,6 +411,11 @@ async function runTrailCycle() {
 
           const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
           log(`[DIAG] ${key.email || key.id} | ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} live=$${livePrice} | lev=${leverage}x | capital=${pctDisplay} | curSL=$${currentSl.toFixed(pricePrec)} | exchSL=$${liveExchangeSl > 0 ? liveExchangeSl.toFixed(pricePrec) : 'N/A'} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
+
+          if (isTraderManual(dbTrade)) {
+            log(`${symbol} Bitunix: manual/Trader-Mode position — watchdog leaves exits to the trader`);
+            continue;
+          }
 
           if (isExpoSetup(dbTrade?.setup)) {
             log(`[EXPO-STRUCTURE-ONLY] ${symbol} Bitunix: TP1/TP2/trailing disabled; waiting for 15m structure exit or hard SL`);
@@ -527,6 +540,11 @@ async function runTrailCycle() {
 
         const profitPct  = isLong ? (curPrice - entryPrice) / entryPrice : (entryPrice - curPrice) / entryPrice;
         const capitalPct = profitPct * leverage;
+
+        if (isTraderManual(trade)) {
+          log(`${trade.symbol} Binance: manual/Trader-Mode position — watchdog leaves exits to the trader`);
+          continue;
+        }
 
         if (isExpoSetup(trade.setup)) {
           log(`[EXPO-STRUCTURE-ONLY] ${trade.symbol} Binance: TP1/TP2/trailing disabled; waiting for 15m structure exit or hard SL`);
