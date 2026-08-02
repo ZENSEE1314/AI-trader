@@ -3402,6 +3402,10 @@ async function syncTradeStatus() {
           // the trail logic re-sets the SL on every improvement anyway.
           syncTradeStatus._slConfirmed = syncTradeStatus._slConfirmed || new Set();
           for (const trade of trades) {
+            // Never place a bot stop-loss on the trader's own manual position —
+            // that SL is a guessed level they never set. Trader Mode = mirror
+            // entries, leave exits (incl. SL) to the trader.
+            if (isTraderManualTrade(trade)) continue;
             const tradeDir = trade.direction || 'LONG';
             const exchangePos = openSymbols.get(posKey(trade.symbol, tradeDir));
             if (!exchangePos) continue;
