@@ -1,12 +1,15 @@
 const express = require('express');
 const { injectTVSignal } = require('../cycle');
+const smc = require('../smc-engine');
+const msob = require('../strategy-ms-ob-vwap');
 
 const router = express.Router();
 
-// Secret check removed per user request — no auth required
-
 // Allowed symbols — only accept signals for active trading pairs.
 const ALLOWED_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT']);
+
+// Bybit kline interval codes.
+const TF = { h1: '60', h4: '240', m15: '15', m1: '1' };
 
 // POST /api/tv-webhook
 // DISABLED — all signals now flow exclusively through SMCPatternAgent (4-step rule).
@@ -28,66 +31,77 @@ const ALLOWED_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT']);
 //
 // Response: { ok, mode, message, signal }
 //
-router.post('/', (req, res) => {
-  const {
-    symbol, direction, price,
-    override, zone, pivot_15m, pivot_1m,
-    ema200Bias, reason, hommaPatterns, volumeOk
-  } = req.body || {};
+// POST /api/tv-webhook
+// A TradingView alert (e.g. from the LuxAlgo Market-Structure dashboard) POSTs
+// here as a TRIGGER. The bot then computes the MS-OB-VWAP short setup itself
+// (HH/LH on 1H/4H → 15m/1m confirm → SHORT near VWAP upper band → TP at the
+// nearest green order block, skip if a red OB is nearer) and, if valid,
+// auto-executes. The alert only needs { symbol, secret }.
+//
+// Gated: OFF unless MSOB_ENABLED=1. If TV_WEBHOOK_SECRET is set, the alert must
+// include a matching `secret`. Backtest before enabling on a live book.
+router.post('/', async (req, res) => {
+  try {
+    if (process.env.MSOB_ENABLED !== '1') {
+      return res.json({ ok: false, message: 'MS-OB-VWAP strategy disabled — set MSOB_ENABLED=1 to enable' });
+    }
+    const { symbol, secret } = req.body || {};
 
-  const sym = (symbol || '').toUpperCase().replace(/[^A-Z]/g, '');
-  if (!ALLOWED_SYMBOLS.has(sym)) {
-    return res.status(400).json({ error: `Symbol ${sym} not in active list` });
+    const wantSecret = process.env.TV_WEBHOOK_SECRET || '';
+    if (wantSecret && secret !== wantSecret) {
+      return res.status(401).json({ ok: false, error: 'bad secret' });
+    }
+
+    const sym = (symbol || '').replace(/.*:/, '').toUpperCase().replace(/[^A-Z]/g, '').replace('USDTP', 'USDT');
+    if (!ALLOWED_SYMBOLS.has(sym)) {
+      return res.status(400).json({ ok: false, error: `Symbol ${sym} not in active list` });
+    }
+
+    // Fetch the timeframes the strategy needs.
+    let c1h, c4h, c15, c1m;
+    try {
+      [c1h, c4h, c15, c1m] = await Promise.all([
+        smc.fetchCandles(sym, TF.h1, 120),
+        smc.fetchCandles(sym, TF.h4, 120),
+        smc.fetchCandles(sym, TF.m15, 200),
+        smc.fetchCandles(sym, TF.m1, 120),
+      ]);
+    } catch (e) {
+      return res.status(502).json({ ok: false, error: `kline fetch failed: ${e.message}` });
+    }
+
+    const setup = msob.evaluate({ symbol: sym, c1h, c4h, c15, c1m });
+    if (!setup.take) {
+      console.log(`[MSOB] ${sym} no trade — ${setup.reason}`);
+      return res.json({ ok: true, taken: false, reason: setup.reason });
+    }
+
+    // Auto-execute: queue a SHORT with TP at the green OB and SL above structure.
+    const signal = {
+      symbol: sym,
+      side: 'SELL',
+      direction: 'SHORT',
+      price: setup.entry,
+      sl: setup.sl,
+      tp1: setup.tp,
+      zone: 'MSOB_VWAP_UPPER',
+      setup: 'MSOB_VWAP',
+      setupName: 'MS-OB-VWAP',
+      score: 999,
+      signalType: 'MSOB-SHORT',
+      source: 'msob',
+      reason: setup.reason,
+      override: true, // strategy already ran full structure/OB/VWAP validation
+      receivedAt: Date.now(),
+    };
+    injectTVSignal(signal);
+    console.log(`[MSOB] ✅ ${sym} SHORT queued @ ${setup.entry} | TP ${setup.tp} | SL ${setup.sl.toFixed(4)} | RR ${setup.rr} — ${setup.reason}`);
+
+    res.json({ ok: true, taken: true, signal: { symbol: sym, direction: 'SHORT', entry: setup.entry, tp: setup.tp, sl: setup.sl, rr: setup.rr }, reason: setup.reason });
+  } catch (e) {
+    console.error('[MSOB webhook] error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
   }
-
-  if (direction !== 'LONG' && direction !== 'SHORT') {
-    return res.status(400).json({ error: 'direction must be LONG or SHORT' });
-  }
-
-  const entryPrice = parseFloat(price);
-  if (!entryPrice || entryPrice <= 0) {
-    return res.status(400).json({ error: 'Invalid price' });
-  }
-
-  // DISABLED — SMCPatternAgent is the sole signal source
-  return res.json({ ok: false, message: 'TV webhook disabled — signals flow through SMCPatternAgent only' });
-
-  const isOverride = override === true || override === 'true';
-
-  const signal = {
-    symbol: sym,
-    side: direction === 'LONG' ? 'BUY' : 'SELL',
-    direction,
-    price: entryPrice,
-    zone: zone || 'TV',
-    pivot: `${pivot_15m || '?'}+${pivot_1m || '?'}`,
-    setup: isOverride ? 'TV_MANUAL_OVERRIDE' : 'TV_WEBHOOK',
-    setupName: isOverride ? 'TV_MANUAL_OVERRIDE' : 'TV_WEBHOOK',
-    score: 999, // TV signals always win dedup against internal signals
-    signalType: `TV-${direction}`,
-    source: 'tradingview',
-    isMomentumBreakout: isOverride, // override = bypass EMA200 gate
-    ema200Bias: ema200Bias || null,
-    pivot_15m: pivot_15m || null,
-    pivot_1m: pivot_1m || null,
-    hommaPatterns: hommaPatterns || null,
-    volumeOk: volumeOk === true || volumeOk === 'true',
-    reason: reason || '',
-    override: isOverride,
-    receivedAt: Date.now(),
-  };
-
-  injectTVSignal(signal);
-
-  const mode = isOverride ? 'OVERRIDE (bypasses all gates)' : 'VALIDATED (runs through SMC+Homma gates)';
-  console.log(`[TV-Webhook] ✅ ${sym} ${direction} @ ${entryPrice} | mode=${mode} | zone=${zone} | 15m=${pivot_15m} | 1m=${pivot_1m} | reason=${reason || 'n/a'}`);
-
-  res.json({
-    ok: true,
-    mode,
-    message: `${sym} ${direction} queued — ${mode}`,
-    signal: `${sym} ${direction} @ ${entryPrice}`
-  });
 });
 
 // POST /api/tv-webhook/dry-run
@@ -148,29 +162,25 @@ router.post('/dry-run', (req, res) => {
 // Returns the expected payload format for TradingView alert messages.
 router.get('/help', (req, res) => {
   res.json({
-    description: 'TradingView webhook endpoint for manual trade signals',
+    description: 'MS-OB-VWAP trigger webhook. The alert is only a trigger — the bot computes the setup (HH/LH on 1H/4H → 15m/1m confirm → SHORT near VWAP upper band → TP at nearest green order block, skip if a red OB is nearer) and auto-executes if valid.',
     method: 'POST',
     url: '/api/tv-webhook',
     headers: { 'Content-Type': 'application/json' },
     payload: {
-      symbol: 'BTCUSDT',
-      direction: 'LONG',
-      price: '{{close}}',
-      override: false,
-      zone: '{{plot_0}}',
-      pivot_15m: '{{plot_1}}',
-      pivot_1m: '{{plot_2}}',
-      ema200Bias: '{{plot_3}}',
-      hommaPatterns: '{{plot_4}}',
-      volumeOk: true,
-      reason: 'LH at upper band + shooting star on 1m'
+      symbol: '{{ticker}}',   // e.g. BITUNIX:ETHUSDT.P — normalised to ETHUSDT
+      secret: '<TV_WEBHOOK_SECRET>'
+    },
+    enable: 'set MSOB_ENABLED=1 (and optionally TV_WEBHOOK_SECRET) in the environment',
+    tuning: {
+      MSOB_VWAP_K: 'upper-band std-dev multiple (default 2)',
+      MSOB_VWAP_PROX_PCT: 'how near the upper band counts as "near" (default 0.15%)',
+      MSOB_MIN_RR: 'minimum reward:risk to take (default 1.2)',
+      MSOB_SL_BUF_PCT: 'stop buffer above structure high / band (default 0.1%)'
     },
     notes: [
-      'No secret required — webhook is open',
-      'override=true bypasses ADX, EMA200, and structure gates — use sparingly',
-      'TV signals always win dedup against internal AI signals',
-      'zone: UPPER_MID / ABOVE_UPPER / LOWER_MID / BELOW_LOWER',
-      'pivot_15m / pivot_1m: HH, HL, LH, LL'
+      'Direction is always SHORT (fade the VWAP upper band) per the current spec',
+      'Response: { ok, taken, reason } — taken=false with a reason when a rule blocks it',
+      'Symbols: BTCUSDT / ETHUSDT / BNBUSDT / SOLUSDT'
     ]
   });
 });
