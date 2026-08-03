@@ -43,10 +43,15 @@ function windowsFor(code, count, now = new Date()) {
     for (let i = 0; i < count; i++) { out.push(`${y}-${pad(m + 1)}-01`); if (--m < 0) { m = 11; y--; } }
     return { dir: '1h', dates: out.reverse() };
   }
-  // 4h — quarters
-  let y = now.getUTCFullYear(), q = Math.floor(now.getUTCMonth() / 3);
-  for (let i = 0; i < count; i++) { out.push(`${y}-${pad(q * 3 + 1)}-01`); if (--q < 0) { q = 3; y--; } }
-  return { dir: '4h', dates: out.reverse() };
+  if (code === '240' || code === '4h') {
+    let y = now.getUTCFullYear(), q = Math.floor(now.getUTCMonth() / 3);
+    for (let i = 0; i < count; i++) { out.push(`${y}-${pad(q * 3 + 1)}-01`); if (--q < 0) { q = 3; y--; } }
+    return { dir: '4h', dates: out.reverse() };
+  }
+  // 1d — 2-year windows anchored on even years (Jan 1)
+  let y = now.getUTCFullYear(); if (y % 2 !== 0) y--;
+  for (let i = 0; i < count; i++) { out.push(`${y}-01-01`); y -= 2; }
+  return { dir: '1d', dates: out.reverse() };
 }
 
 function normalize(r) {
