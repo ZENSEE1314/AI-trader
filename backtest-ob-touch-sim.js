@@ -87,16 +87,21 @@ async function run() {
   // raw.githubusercontent.com (works in the web sandbox where exchanges are blocked).
   // Force with KLINES_SOURCE=static | bybit.
   const wantStatic = process.env.KLINES_SOURCE === 'static';
-  const weeks15 = Math.max(12, Math.ceil(BARS_15M / 672) + 1);   // ≥ ~12 weeks for a real sample
+  // Static window is NOT bound by Bybit's 1000-bar cap — size it in weeks.
+  // WEEKS_15M overrides; else ~12 weeks (or more if BARS_15M asks for it).
+  const weeks15 = Math.max(4, parseInt(process.env.WEEKS_15M || '', 10)
+    || Math.max(12, Math.ceil(BARS_15M / 672) + 1));
+  const months1h  = Math.ceil(weeks15 / 4) + 1;
+  const quarters4h = Math.ceil(weeks15 / 13) + 1;
   let c15, c1h, c4h, source = 'bybit';
 
   async function fromStatic() {
     const { loadStatic } = require('./klines-static');
-    source = 'static-klines (finom/static-klines via raw.githubusercontent.com)';
+    source = `static-klines (${weeks15}w 15m / ${months1h}mo 1h / ${quarters4h}q 4h via raw.githubusercontent.com)`;
     return Promise.all([
       loadStatic(SYMBOL, '15m', weeks15),
-      loadStatic(SYMBOL, '1h', 6),
-      loadStatic(SYMBOL, '4h', 3),
+      loadStatic(SYMBOL, '1h', months1h),
+      loadStatic(SYMBOL, '4h', quarters4h),
     ]);
   }
 
