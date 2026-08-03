@@ -1654,6 +1654,31 @@ async function main() {
         }
       }
 
+      // ── OB-PATH MODE GATE — multi-timeframe nearest-OB filter, both directions ──
+      // Unified switch for the mode that wins backtest-ob-touch-sim.js:
+      //   OB_PATH_MODE = touch | magnet | barrier | align   (unset = off)
+      // Scans OBs on 15m/1h/4h, finds the nearest, and blocks entries per the
+      // chosen rule. Env-gated (off unless OB_PATH_MODE set), TV-override bypass,
+      // fails OPEN on any error. Applies to LONG and SHORT.
+      if (process.env.OB_PATH_MODE
+          && !(pick.source === 'tradingview' && pick.override === true)) {
+        try {
+          const { evaluateOBMode } = require('./ob-touch');
+          const pathGate = await evaluateOBMode({
+            symbol: pick.symbol || pick.sym,
+            direction: pick.direction,
+            price: pick.price || pick.entry || null,
+          });
+          if (!pathGate.allow) {
+            bLog.trade(`OB-PATH BLOCK [${process.env.OB_PATH_MODE}]: ${pick.symbol} ${pick.direction} — ${pathGate.reason}`);
+            continue;
+          }
+          if (pathGate.checked) bLog.trade(`OB-PATH OK [${process.env.OB_PATH_MODE}]: ${pick.symbol} ${pick.direction} — ${pathGate.reasons[pathGate.reasons.length - 1]}`);
+        } catch (e) {
+          bLog.error(`ob-path error (fail-open, trade allowed): ${e.message}`);
+        }
+      }
+
       // ── TradingView MANUAL OVERRIDE ────────────────────────────
       // If user sends override=true from TV webhook, bypass ALL gates
       // and execute immediately. Log it loud for audit trail.

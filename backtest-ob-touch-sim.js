@@ -73,17 +73,22 @@ function agg(rows) {
   return { n, wr: n ? wins / n * 100 : 0, net, avg: n ? net / n : 0 };
 }
 
+// The competing entry filters, evaluated on the SAME short signals.
+const MODES = ['baseline', 'touch', 'magnet', 'barrier', 'align'];
+
 async function run() {
   const smc = require('./smc-engine');
-  const { decideShortFromOBs, normalize } = require('./ob-touch');
+  const { decideShortFromOBs, decideByMode, classifyOBs, normalize } = require('./ob-touch');
   const tol = (Number(process.env.OB_TOUCH_MAX_DIST_PCT || 0.5) || 0.5) / 100;
   const tagWin = Math.max(1, parseInt(process.env.OB_TOUCH_TAG_WINDOW || '12', 10) || 12);
+  const maxRangePct = (Number(process.env.OB_PATH_MAX_RANGE_PCT || 3) || 3) / 100;
 
   console.log(`Fetching ${SYMBOL} klines from Bybit …`);
-  let c15, c4h;
+  let c15, c1h, c4h;
   try {
-    [c15, c4h] = await Promise.all([
+    [c15, c1h, c4h] = await Promise.all([
       smc.fetchCandles(SYMBOL, '15', BARS_15M),
+      smc.fetchCandles(SYMBOL, '60', 500),
       smc.fetchCandles(SYMBOL, '240', 500),
     ]);
   } catch (e) {
@@ -93,13 +98,29 @@ async function run() {
     process.exitCode = 1; return;
   }
   if (!c15 || c15.length < 100) { console.error('Not enough 15m data.'); process.exitCode = 1; return; }
-  console.log(`Got ${c15.length}×15m and ${(c4h || []).length}×4h bars. `
-    + `Params: SL=${(SL_PCT * 100).toFixed(2)}% RR=1:${RR} tol=${(tol * 100).toFixed(2)}% tag=${tagWin}\n`);
+  console.log(`Got ${c15.length}×15m, ${(c1h || []).length}×1h, ${(c4h || []).length}×4h bars. `
+    + `Params: SL=${(SL_PCT * 100).toFixed(2)}% RR=1:${RR} tol=${(tol * 100).toFixed(2)}% `
+    + `range=${(maxRangePct * 100).toFixed(1)}% tag=${tagWin}\n`);
 
   const cs = c15.map(normalize);
+  const c1 = (c1h || []).map(normalize);
+  const c4 = (c4h || []).map(normalize);
   const pivots = smc.detectPivots(cs, LBL_15M, LBR_15M).filter(p => p.type === 'HIGH');
 
-  const all = [], gated = [];
+  // As-of multi-timeframe OB set at time T (15m + 1h + 4h), uniform + merged.
+  const obsAsOf = (T) => {
+    const per = [['15', cs], ['60', c1], ['240', c4]];
+    let merged = [];
+    for (const [tf, arr] of per) {
+      const upto = arr.filter(b => b.t <= T);
+      if (upto.length < 30) continue;
+      const st = smc.analyzeStructure(upto, 10, 3);
+      merged = merged.concat(classifyOBs(smc.detectOrderBlocks(upto, st.pivots), tf));
+    }
+    return merged;
+  };
+
+  const cohorts = Object.fromEntries(MODES.map(m => [m, []]));
   let lastEntryBar = -Infinity, prevHighPrice = null;
 
   for (const piv of pivots) {
@@ -114,41 +135,54 @@ async function run() {
     const entry = cs[cbar].c;
     const vw = vwapAsOf(cs, cbar);
     if (!vw) continue;
-    // premium half only, and not extended above the +2σ band (strategy: no trade)
-    if (!(entry > vw.vwap && entry <= vw.upper)) continue;
+    if (!(entry > vw.vwap && entry <= vw.upper)) continue;      // premium half, not extended
 
-    // 4H trend must be DOWN, as-of this bar
     const asof4h = (c4h || []).filter(b => b.t <= cs[cbar].t);
-    if (asof4h.length < 60 || smc.classifyTrend(asof4h) !== 'DOWN') continue;
+    if (asof4h.length < 60 || smc.classifyTrend(asof4h) !== 'DOWN') continue;   // 4H down
 
     lastEntryBar = cbar;
-    const future = cs.slice(cbar + 1);
-    const out = simulateShort(entry, future);
-    all.push(out);
+    const out = simulateShort(entry, cs.slice(cbar + 1));
 
-    // OB-touch gate, computed with data available at the entry bar
-    const upto = cs.slice(0, cbar + 1);
-    const st = smc.analyzeStructure(upto, 10, 3);
-    const obs = smc.detectOrderBlocks(upto, st.pivots) || [];
-    const recentHigh = Math.max(...upto.slice(-tagWin).map(c => c.h));
-    if (decideShortFromOBs(obs, entry, { recentHigh, tol }).allow) gated.push(out);
+    // data available at the entry bar
+    const T = cs[cbar].t;
+    const win = cs.slice(Math.max(0, cbar - tagWin + 1), cbar + 1);
+    const recentHigh = Math.max(...win.map(c => c.h));
+    const recentLow  = Math.min(...win.map(c => c.l));
+    const obs15raw = smc.detectOrderBlocks(cs.slice(0, cbar + 1), smc.analyzeStructure(cs.slice(0, cbar + 1), 10, 3).pivots) || [];
+    const obsMulti = obsAsOf(T);
+    const P = { direction: 'SHORT', price: entry, obs: obsMulti, recentHigh, recentLow, maxRangePct };
+
+    const allow = {
+      baseline: true,
+      touch:   decideShortFromOBs(obs15raw, entry, { recentHigh, tol }).allow,
+      magnet:  decideByMode('magnet',  P).allow,
+      barrier: decideByMode('barrier', P).allow,
+      align:   decideByMode('align',   P).allow,
+    };
+    for (const m of MODES) if (allow[m]) cohorts[m].push(out);
   }
 
-  const A = agg(all), G = agg(gated);
-  const line = (name, x) => console.log(
-    `${name.padEnd(22)} n=${String(x.n).padStart(3)}  WR ${pctS(x.wr).padStart(6)}  net ${rS(x.net).padStart(9)}  avg ${rS(x.avg)}`);
+  const rows = MODES.map(m => ({ mode: m, ...agg(cohorts[m]) }));
+  const base = rows.find(r => r.mode === 'baseline');
+  // Rank the FILTERS (exclude baseline) by avg-R, then net-R.
+  const ranked = rows.filter(r => r.mode !== 'baseline')
+    .sort((a, b) => (b.avg - a.avg) || (b.net - a.net));
 
-  console.log('══════════ OB-touch SHORT gate — forward simulation ══════════');
-  line('ALL LH shorts', A);
-  line('  └ gated (OB touch)', G);
-  console.log(`\nSkipped by gate: ${A.n - G.n} shorts`);
-  const skippedNet = A.net - G.net;
-  console.log(`Net R of skipped shorts: ${rS(skippedNet)}  (negative = the gate cut net-losing shorts)`);
-  console.log(`Avg-R change: ${rS(A.avg)} → ${rS(G.avg)}  (${rS(G.avg - A.avg)} per trade)`);
-  console.log('\nReading it: the gate is worth enabling if it lifts avg-R and the skipped');
-  console.log('shorts were net-negative — i.e. it removed more bad shorts than good ones.');
-  console.log('\nCaveat: broader signal set than live (no 1m/Homma/chase). Treat as directional,');
-  console.log('then confirm on your real fills with backtest-ob-touch.js in prod.');
+  console.log('══════════ OB entry filters — forward simulation (SHORTS) ══════════');
+  console.log('mode        n     WR      net R     avg R    Δavg vs base');
+  const fmt = r => `${r.mode.padEnd(9)} ${String(r.n).padStart(3)}  ${pctS(r.wr).padStart(6)}  ${rS(r.net).padStart(9)}  ${rS(r.avg).padStart(7)}  ${rS(r.avg - base.avg)}`;
+  console.log(fmt(base));
+  for (const r of ranked) console.log(fmt(r));
+
+  const best = ranked[0];
+  console.log(`\n🏆 Best filter by avg-R: ${best.mode}  (${rS(best.avg)}/trade over ${best.n} shorts, `
+    + `${rS(best.avg - base.avg)} vs no filter)`);
+  console.log('\nHow to read it:');
+  console.log('  • avg R = expectancy per trade (higher is better); net R = total edge over the window.');
+  console.log('  • A good filter LIFTS avg-R while keeping n high enough to matter.');
+  console.log('  • n far below baseline = very selective; check it is not just luck on a few trades.');
+  console.log('\nCaveat: broader signal set than live (no 1m/Homma/chase), fixed-bracket exits.');
+  console.log('Treat as directional; confirm the winner on real fills with backtest-ob-touch.js in prod.');
 }
 
 // ── Offline self-test of the P&L engine (no network) ──
@@ -167,6 +201,29 @@ function selftest() {
   chk('SL wins ties', simulateShort(100, [{ h: 103, l: 96, c: 100 }], 0.025, 1.5).r, -1);
   // Neither → mark-to-market: (100-99)/(100*0.025) = 0.4R
   chk('open m2m', simulateShort(100, [{ h: 101, l: 99.5, c: 99 }], 0.025, 1.5).r, 0.4);
+
+  // ── Mode decisions (pure, no network) ──
+  const { decideByMode } = require('./ob-touch');
+  const chkB = (name, got, want) => {
+    const ok = got === want;
+    console.log(`  ${ok ? '✓' : '✗'} ${name}: allow=${got} (want ${want})`);
+    ok ? pass++ : fail++;
+  };
+  const bearAbove = [{ kind: 'BEARISH', top: 75, bottom: 74.5 }];
+  const bullBelow = [{ kind: 'BULLISH', top: 73.5, bottom: 73 }];
+  // align: short the tagged bearish OB above → allow
+  chkB('align short @tagged bearish above', decideByMode('align', { direction: 'SHORT', price: 74.4, obs: bearAbove, recentHigh: 75.1, recentLow: 74.3 }).allow, true);
+  // align: nearest is bullish demand below → short blocked (wrong direction)
+  chkB('align short vs bullish-below', decideByMode('align', { direction: 'SHORT', price: 74.0, obs: bullBelow, recentHigh: 74.1, recentLow: 74.0 }).allow, false);
+  // magnet: bearish OB above untagged → short blocked (price pulled up first)
+  chkB('magnet short vs untagged-above', decideByMode('magnet', { direction: 'SHORT', price: 74.0, obs: bearAbove, recentHigh: 74.2, recentLow: 73.9 }).allow, false);
+  // magnet: same OB already tagged → short allowed
+  chkB('magnet short @tagged-above', decideByMode('magnet', { direction: 'SHORT', price: 74.0, obs: bearAbove, recentHigh: 75.1, recentLow: 73.9 }).allow, true);
+  // barrier: OB below in the path untagged → short blocked
+  chkB('barrier short into below-OB', decideByMode('barrier', { direction: 'SHORT', price: 74.0, obs: bullBelow, recentHigh: 74.1, recentLow: 74.0 }).allow, false);
+  // barrier: no OB in the downward path → short allowed
+  chkB('barrier short, path clear', decideByMode('barrier', { direction: 'SHORT', price: 74.0, obs: bearAbove, recentHigh: 74.1, recentLow: 74.0 }).allow, true);
+
   console.log(`\nself-test: ${pass} passed, ${fail} failed`);
   process.exitCode = fail ? 1 : 0;
 }
