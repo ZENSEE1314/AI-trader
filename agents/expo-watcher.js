@@ -60,7 +60,7 @@ function computeVwapBands(bars) {
   return { v2u, v2d, mid };
 }
 
-function expoPivotAtOuterVwap(periodsNewestFirst, labelX, direction) {
+function expoPivotAtOuterVwap(periodsNewestFirst, labelX, direction, useZone = false) {
   const bars = asc(periodsNewestFirst);
   const idx = bars.length - 1 - labelX;
   if (idx < 0 || idx >= bars.length) return { pass: false, reason: 'missing pivot bar' };
@@ -68,6 +68,16 @@ function expoPivotAtOuterVwap(periodsNewestFirst, labelX, direction) {
   const { v2u, v2d, mid } = computeVwapBands(bars);
   const upper = v2u[idx], lower = v2d[idx], vw = mid[idx];
   if (upper == null || lower == null || vw == null) return { pass: false, reason: 'missing VWAP band' };
+
+  // VWAP-ZONE mode (SOL): only enter when the pivot sits 1-2σ from VWAP — long in the
+  // lower band zone, short in the upper band zone. Backtest +$2,593/90d vs base +$1,691.
+  if (useZone) {
+    const pref = direction === 'SHORT' ? pHigh(bar) : pLow(bar);
+    const sigma = (upper - vw) / 2;
+    const z = sigma > 0 ? (pref - vw) / sigma : 0;   // 0=VWAP, ±2 = outer band
+    const zpass = direction === 'SHORT' ? (z >= 1 && z <= 2) : (z <= -1 && z >= -2);
+    return { pass: zpass, reason: zpass ? `15m in ${direction === 'SHORT' ? 'upper' : 'lower'} VWAP zone (z=${z.toFixed(1)})` : `15m outside VWAP zone (z=${z.toFixed(1)})` };
+  }
 
   // 15m context filter:
   // - HL long is valid above VWAP mid, or below the lower outer VWAP band.
@@ -177,8 +187,16 @@ const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
 const SCAN_MS      = 30_000;               // 1m entry scan cadence
 const HEARTBEAT_MS = 5 * 60 * 1000;        // explain silent/no-trade periods
 const STALE_TV_MS  = 12 * 60 * 1000;       // reconnect if TradingView study stops updating
-const LEVERAGE     = Number(process.env.EXPO_LEVERAGE || 50);   // 50x per owner 2026-07-16 (backtest profit peak; SL auto-tightens to 1% price move). Roll back: set EXPO_LEVERAGE=20.
-const SL_MARGIN    = 0.50;                 // hard SL −50% of margin
+const LEVERAGE     = Number(process.env.EXPO_LEVERAGE || 50);   // fallback leverage for any coin without an override
+const SL_MARGIN    = 0.50;                 // fallback hard SL −50% of margin
+// Per-coin config (owner 2026-08-03). SOL: 75x, 30% SL, VWAP-zone entry (1-2σ from
+// VWAP). ETH: 50x, 40% SL, base entry (no zone). Executor honors signal.leverage +
+// signal.slMarginFrac (cycle.js:2174/2224), so per-coin lev/SL is set in the signal.
+const LEV_BY_SYM       = { SOLUSDT: 75, ETHUSDT: 50 };
+const SL_MARGIN_BY_SYM = { SOLUSDT: 0.30, ETHUSDT: 0.40 };
+const VWAP_ZONE_BY_SYM = { SOLUSDT: true, ETHUSDT: false };   // true = tight 1-2σ zone; false = base gate
+const levOf = (sym) => LEV_BY_SYM[sym] || LEVERAGE;
+const slMarginOf = (sym) => SL_MARGIN_BY_SYM[sym] ?? SL_MARGIN;
 const BYBIT_URL    = 'https://api.bybit.com/v5/market/kline';
 
 // ── Shared state ─────────────────────────────────────────────────
@@ -207,14 +225,12 @@ function biasAlive(sym) {
 // ── Which symbols may open LABEL entries ──────────────────────────
 // All TV_SYMBOLS stay watched (their labels drive structure EXITS for both this
 // strategy AND the sweep watcher) — but only these open entry windows.
-// SOL-only (owner 2026-07-24). BTC dropped 07-21: label loses both windows
-// (−$1,128 / −$1,046). ETH dropped 07-24: its +$2,785/90d backtest (14 trades)
-// did NOT hold live — 2 label shorts went +$2.5 then −$30 (net ≈ −$27 across
-// accounts), both counter-trend shorts into a rising ETH. SOL is the only coin
-// that wins in backtest (+$1,691 / +$1,475) AND live. Env EXPO_ENTRY_SYMBOLS
-// overrides. BTC/ETH still watched for exits.
+// SOL + ETH (owner 2026-08-03). BTC stays dropped (loses every config/window). SOL
+// runs 75x/30%SL/VWAP-zone (backtest +$3,898/90d). ETH re-added at 50x/40%SL/base
+// (+$1,937/90d) per owner go-live — thinner sample + lost live once, so WATCH it.
+// Env EXPO_ENTRY_SYMBOLS overrides. BTC still watched for exits.
 const ENTRY_SYMBOLS = new Set(
-  (process.env.EXPO_ENTRY_SYMBOLS || 'SOLUSDT').split(',').map(s => s.trim()).filter(Boolean)
+  (process.env.EXPO_ENTRY_SYMBOLS || 'SOLUSDT,ETHUSDT').split(',').map(s => s.trim()).filter(Boolean)
 );
 
 // ── Power-confirmation gate (evaluated ONCE, at the 15m label) ────
@@ -442,7 +458,7 @@ function watch15m(client, ind, tvTicker) {
           bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} — label entries disabled for ${sym} (exits still active)`);
           return;
         }
-        const vwap = expoPivotAtOuterVwap(periods, newest.x, newest.dir);
+        const vwap = expoPivotAtOuterVwap(periods, newest.x, newest.dir, !!VWAP_ZONE_BY_SYM[sym]);
         if (!vwap.pass) {
           delete biasMap[sym];
           bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${vwap.reason}; ${newest.dir} requires 15m VWAP trend alignment`);
@@ -645,8 +661,8 @@ async function scanEntries() {
         signalType: `EXPO-${dir}`,
         source: 'expo-watcher',
         timeframe: '1',
-        leverage: LEVERAGE,
-        slMarginFrac: SL_MARGIN / LEVERAGE,
+        leverage: levOf(sym),                       // per-coin: SOL 75x, ETH 50x
+        slMarginFrac: slMarginOf(sym) / levOf(sym), // per-coin: SOL 30%/75x, ETH 40%/50x
         isMomentumBreakout: true,
         override: true,
         receivedAt: Date.now(),
@@ -704,6 +720,7 @@ function getStatus() {
       watched: TV_SYMBOLS.map(normSym), entrySymbols: [...ENTRY_SYMBOLS],
       labelMaxAgeMin: LABEL_MAX_AGE_MS / 60000, entryWindowMin: WINDOW_MS / 60000,
       leverage: LEVERAGE, slMargin: SL_MARGIN,
+      perCoin: [...ENTRY_SYMBOLS].reduce((o, s) => { o[s] = { lev: levOf(s), slMargin: slMarginOf(s), vwapZone: !!VWAP_ZONE_BY_SYM[s] }; return o; }, {}),
       powerGate: POWER_GATE, powerTh: POWER_TH, powerLowTh: POWER_LOW_TH, powerAt: 'label',
     },
     tvConnected: !!_client,
