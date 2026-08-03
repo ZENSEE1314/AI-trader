@@ -1558,6 +1558,22 @@ async function main() {
       _tvSignalQueue.clear();
     }
 
+    // ── MTF-OB strategy — env-gated, default OFF ──
+    // Top-down chain: 4h/1d OB zone → 15m HL/LH trigger → 3m CHoCH entry (tight
+    // stop), TP at opposite liquidity. Inert unless MTF_OB_ENABLED=1; wrapped so
+    // a scan error can never break the cycle. Picks flow through all the normal
+    // gates below (bans, guards, EMA200, loss-tracker) like any other signal.
+    if (process.env.MTF_OB_ENABLED === '1') {
+      try {
+        const { scanMtfOb } = require('./strategy-mtf-ob');
+        const mtfPicks = await scanMtfOb(log);
+        for (const p of mtfPicks) signals.push(p);
+        if (mtfPicks.length) bLog.scan(`MTF-OB: ${mtfPicks.length} signal(s) added`);
+      } catch (mtfErr) {
+        bLog.error(`MTF-OB scan error (non-blocking): ${mtfErr.message}`);
+      }
+    }
+
     if (!signals.length) {
       log('No AI signals found this cycle — agents still learning.');
 
