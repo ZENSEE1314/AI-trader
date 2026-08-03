@@ -43,7 +43,7 @@ function find1mTrigger(c1m, direction, buf = 0.0005) {
     const sh = hs[hs.length - 1], slw = ls[ls.length - 1];
     if (sh && slw && last.c > sh.price) {
       const stop = slw.price * (1 - buf);
-      if (stop < last.c) return { triggered: true, entry: last.c, stop, reason: `1m bullish CHoCH > ${sh.price}` };
+      if (stop < last.c) return { triggered: true, entry: last.c, stop, reason: `bullish CHoCH > ${sh.price}` };
     }
     return { triggered: false, reason: 'no 1m bullish CHoCH yet' };
   }
@@ -51,32 +51,39 @@ function find1mTrigger(c1m, direction, buf = 0.0005) {
     const slw = ls[ls.length - 1], sh = hs[hs.length - 1];
     if (sh && slw && last.c < slw.price) {
       const stop = sh.price * (1 + buf);
-      if (stop > last.c) return { triggered: true, entry: last.c, stop, reason: `1m bearish CHoCH < ${slw.price}` };
+      if (stop > last.c) return { triggered: true, entry: last.c, stop, reason: `bearish CHoCH < ${slw.price}` };
     }
     return { triggered: false, reason: 'no 1m bearish CHoCH yet' };
   }
   return { triggered: false, reason: 'unknown direction' };
 }
 
-// Live refinement: fetch recent 1m candles and look for the trigger. Async +
-// fail-open. `candles1m` may be injected (tests); otherwise fetched from Bybit
-// (prod — 1m isn't reachable in the web sandbox).
-async function refineEntryOn1m({ symbol, direction, bars = 60, candles1m = null, buf = 0.0005 } = {}) {
+// Live refinement: fetch recent low-timeframe candles and look for the CHoCH
+// trigger. The entry timeframe is a config choice — 1m is tightest but noisy,
+// 3m is the usual sweet spot (less whipsaw), 5m calmer still. Async + fail-open.
+// `candles` may be injected (tests); otherwise fetched from Bybit (prod — sub-15m
+// isn't reachable in the web sandbox).
+//   entryTf: Bybit interval code — '1' | '3' | '5' (default from ENTRY_TF, else '3').
+async function refineEntry({ symbol, direction, entryTf = null, bars = 60, candles = null, buf = 0.0005 } = {}) {
+  const tf = String(entryTf || process.env.ENTRY_TF || '3');
   try {
-    let c1m = candles1m;
-    if (!c1m) {
+    let c = candles;
+    if (!c) {
       const smc = require('./smc-engine');
-      c1m = await smc.fetchCandles(symbol, '1', bars);   // Bybit 1-minute klines
+      c = await smc.fetchCandles(symbol, tf, bars);      // Bybit low-TF klines
     }
-    if (!Array.isArray(c1m) || c1m.length < 8)
-      return { triggered: false, checked: false, reason: '1m data unavailable — fall back to 15m entry' };
-    return { checked: true, ...find1mTrigger(c1m, direction, buf) };
+    if (!Array.isArray(c) || c.length < 8)
+      return { triggered: false, checked: false, tf, reason: `${tf}m data unavailable — fall back to 15m entry` };
+    return { checked: true, tf, ...find1mTrigger(c, direction, buf) };
   } catch (e) {
-    return { triggered: false, checked: false, reason: `1m fetch failed — fall back to 15m: ${e.message}` };
+    return { triggered: false, checked: false, tf, reason: `${tf}m fetch failed — fall back to 15m: ${e.message}` };
   }
 }
 
-module.exports = { find1mTrigger, refineEntryOn1m, swings };
+// Back-compat wrapper: 1-minute entry specifically.
+const refineEntryOn1m = (opts = {}) => refineEntry({ ...opts, entryTf: '1', candles: opts.candles1m ?? opts.candles ?? null });
+
+module.exports = { find1mTrigger, findEntryTrigger: find1mTrigger, refineEntry, refineEntryOn1m, swings };
 
 // ── Offline self-test of the pure trigger (no network) ──
 function selftest() {
