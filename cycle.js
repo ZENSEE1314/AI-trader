@@ -1628,6 +1628,32 @@ async function main() {
         }
       }
 
+      // ── OB-TOUCH SHORT GATE — env-gated, default OFF, SHORT-only ──
+      // "The OB on top should get hit first." Blocks shorts taken in the middle
+      // of a range with unmitigated bearish supply still overhead — requires the
+      // entry to sit AT a tagged bearish order block. Inert unless
+      // OB_TOUCH_SHORTS_ENABLED=1; TV override bypasses it; fails OPEN on any
+      // error; never touches LONGs. Backtest with backtest-ob-touch.js first.
+      if (process.env.OB_TOUCH_SHORTS_ENABLED === '1'
+          && String(pick.direction || '').toUpperCase() === 'SHORT'
+          && !(pick.source === 'tradingview' && pick.override === true)) {
+        try {
+          const { evaluateShortOBTouch } = require('./ob-touch');
+          const obGate = await evaluateShortOBTouch({
+            symbol: pick.symbol || pick.sym,
+            direction: pick.direction,
+            price: pick.price || pick.entry || null,
+          });
+          if (!obGate.allow) {
+            bLog.trade(`OB-TOUCH BLOCK: ${pick.symbol} SHORT — ${obGate.reason}`);
+            continue;
+          }
+          if (obGate.checked) bLog.trade(`OB-TOUCH OK: ${pick.symbol} SHORT — ${obGate.reasons[obGate.reasons.length - 1]}`);
+        } catch (e) {
+          bLog.error(`ob-touch error (fail-open, trade allowed): ${e.message}`);
+        }
+      }
+
       // ── TradingView MANUAL OVERRIDE ────────────────────────────
       // If user sends override=true from TV webhook, bypass ALL gates
       // and execute immediately. Log it loud for audit trail.
