@@ -1,0 +1,98 @@
+name: OB-touch short-gate backtest
+
+# Runs backtest-ob-touch.js in an environment that HAS DATABASE_URL and can
+# reach Bybit (the web sandbox can't — exchange egress is blocked there).
+# Trigger it manually from the Actions tab ("Run workflow"), tune the inputs,
+# and it posts the WITH-vs-WITHOUT short P&L to the PR (or the given issue).
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Look-back window in days'
+        required: false
+        default: '90'
+      symbols:
+        description: 'Symbols to evaluate (comma-separated)'
+        required: false
+        default: 'SOLUSDT'
+      max_dist_pct:
+        description: 'OB_TOUCH_MAX_DIST_PCT — band around the OB top, in %'
+        required: false
+        default: '0.5'
+      tag_window:
+        description: 'OB_TOUCH_TAG_WINDOW — recent 15m bars a wick must have tagged the OB'
+        required: false
+        default: '12'
+      comment_target:
+        description: 'PR or issue number to post the report to'
+        required: false
+        default: '164'
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      - name: Install backtest deps only
+        run: npm install pg node-fetch@2 --no-save
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli@latest
+
+      - name: Run OB-touch backtest with Railway env injected
+        id: backtest
+        run: |
+          set +e
+          # railway run injects DATABASE_URL etc. into the local process;
+          # backtest-ob-touch.js reads it via require('./db').
+          railway run --service "$RAILWAY_SERVICE_ID" \
+            -- env DAYS="${{ inputs.days }}" \
+                   OB_TOUCH_SYMBOLS="${{ inputs.symbols }}" \
+                   OB_TOUCH_MAX_DIST_PCT="${{ inputs.max_dist_pct }}" \
+                   OB_TOUCH_TAG_WINDOW="${{ inputs.tag_window }}" \
+            node backtest-ob-touch.js > /tmp/out.txt 2> /tmp/err.txt
+          rc=$?
+          {
+            echo "## 🔬 OB-touch short-gate backtest — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo "\`days=${{ inputs.days }} symbols=${{ inputs.symbols }} max_dist=${{ inputs.max_dist_pct }}% tag_window=${{ inputs.tag_window }}\`"
+            echo ""
+            if [ $rc -ne 0 ]; then
+              echo "### ⚠️ Run failed (rc=$rc)"
+              echo '```'
+              tail -n 60 /tmp/err.txt
+              echo '```'
+            fi
+            echo "### Output"
+            echo '```'
+            tail -n 400 /tmp/out.txt
+            echo '```'
+          } > /tmp/comment.md
+          cat /tmp/comment.md >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "BODY<<EOF"
+            cat /tmp/comment.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post report to PR / issue
+        if: ${{ inputs.comment_target != '' }}
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ inputs.comment_target }}
+          body: ${{ steps.backtest.outputs.BODY }}
