@@ -54,6 +54,17 @@ jobs:
       - name: Install Railway CLI
         run: npm i -g @railway/cli@latest
 
+      - name: Mode leaderboard (DB-free sim, klines only)
+        id: sim
+        run: |
+          set +e
+          # No DB needed — reads Bybit klines directly (Actions runners have egress).
+          SYMBOL="$(echo "${{ inputs.symbols }}" | cut -d, -f1)" \
+          OB_TOUCH_MAX_DIST_PCT="${{ inputs.max_dist_pct }}" \
+          OB_TOUCH_TAG_WINDOW="${{ inputs.tag_window }}" \
+            node backtest-ob-touch-sim.js > /tmp/sim.txt 2> /tmp/simerr.txt
+          echo "sim_rc=$?" >> "$GITHUB_OUTPUT"
+
       - name: Run OB-touch backtest with Railway env injected
         id: backtest
         run: |
@@ -68,19 +79,25 @@ jobs:
             node backtest-ob-touch.js > /tmp/out.txt 2> /tmp/err.txt
           rc=$?
           {
-            echo "## 🔬 OB-touch short-gate backtest — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo "## 🔬 OB entry-filter backtest — $(date -u +'%Y-%m-%d %H:%M UTC')"
             echo ""
             echo "\`days=${{ inputs.days }} symbols=${{ inputs.symbols }} max_dist=${{ inputs.max_dist_pct }}% tag_window=${{ inputs.tag_window }}\`"
             echo ""
+            echo "### Mode leaderboard — which entry filter is best (DB-free sim)"
+            echo '```'
+            tail -n 40 /tmp/sim.txt
+            [ -s /tmp/simerr.txt ] && { echo "-- stderr --"; tail -n 20 /tmp/simerr.txt; }
+            echo '```'
+            echo ""
+            echo "### Real-fills replay (touch gate, needs DB)"
             if [ $rc -ne 0 ]; then
-              echo "### ⚠️ Run failed (rc=$rc)"
+              echo "> ⚠️ Run failed (rc=$rc)"
               echo '```'
-              tail -n 60 /tmp/err.txt
+              tail -n 40 /tmp/err.txt
               echo '```'
             fi
-            echo "### Output"
             echo '```'
-            tail -n 400 /tmp/out.txt
+            tail -n 300 /tmp/out.txt
             echo '```'
           } > /tmp/comment.md
           cat /tmp/comment.md >> "$GITHUB_STEP_SUMMARY"
