@@ -83,21 +83,45 @@ async function run() {
   const tagWin = Math.max(1, parseInt(process.env.OB_TOUCH_TAG_WINDOW || '12', 10) || 12);
   const maxRangePct = (Number(process.env.OB_PATH_MAX_RANGE_PCT || 3) || 3) / 100;
 
-  console.log(`Fetching ${SYMBOL} klines from Bybit …`);
-  let c15, c1h, c4h;
-  try {
-    [c15, c1h, c4h] = await Promise.all([
-      smc.fetchCandles(SYMBOL, '15', BARS_15M),
-      smc.fetchCandles(SYMBOL, '60', 500),
-      smc.fetchCandles(SYMBOL, '240', 500),
+  // Data source: Bybit if reachable (prod), else the static-klines dataset over
+  // raw.githubusercontent.com (works in the web sandbox where exchanges are blocked).
+  // Force with KLINES_SOURCE=static | bybit.
+  const wantStatic = process.env.KLINES_SOURCE === 'static';
+  const weeks15 = Math.max(12, Math.ceil(BARS_15M / 672) + 1);   // ≥ ~12 weeks for a real sample
+  let c15, c1h, c4h, source = 'bybit';
+
+  async function fromStatic() {
+    const { loadStatic } = require('./klines-static');
+    source = 'static-klines (finom/static-klines via raw.githubusercontent.com)';
+    return Promise.all([
+      loadStatic(SYMBOL, '15m', weeks15),
+      loadStatic(SYMBOL, '1h', 6),
+      loadStatic(SYMBOL, '4h', 3),
     ]);
-  } catch (e) {
-    console.error(`\nKline fetch failed: ${e.message}`);
-    console.error('If this is a web sandbox, api.bybit.com is likely egress-blocked — set the');
-    console.error('cloud environment Network access to Custom and add api.bybit.com, then retry.');
+  }
+
+  if (wantStatic) {
+    console.log(`Loading ${SYMBOL} klines from static-klines dataset …`);
+    [c15, c1h, c4h] = await fromStatic();
+  } else {
+    console.log(`Fetching ${SYMBOL} klines from Bybit …`);
+    try {
+      [c15, c1h, c4h] = await Promise.all([
+        smc.fetchCandles(SYMBOL, '15', BARS_15M),
+        smc.fetchCandles(SYMBOL, '60', 500),
+        smc.fetchCandles(SYMBOL, '240', 500),
+      ]);
+    } catch (e) {
+      console.log(`Bybit unreachable (${e.message}) — falling back to static-klines dataset …`);
+      [c15, c1h, c4h] = await fromStatic();
+    }
+  }
+  if (!c15 || c15.length < 100) {
+    console.error('Not enough 15m data from any source.');
+    console.error('(static-klines needs raw.githubusercontent.com egress; Bybit needs api.bybit.com.)');
     process.exitCode = 1; return;
   }
-  if (!c15 || c15.length < 100) { console.error('Not enough 15m data.'); process.exitCode = 1; return; }
+  console.log(`Source: ${source}`);
   console.log(`Got ${c15.length}×15m, ${(c1h || []).length}×1h, ${(c4h || []).length}×4h bars. `
     + `Params: SL=${(SL_PCT * 100).toFixed(2)}% RR=1:${RR} tol=${(tol * 100).toFixed(2)}% `
     + `range=${(maxRangePct * 100).toFixed(1)}% tag=${tagWin}\n`);
