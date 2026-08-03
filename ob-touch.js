@@ -29,6 +29,32 @@ const tagWindow  = () => Math.max(1, parseInt(process.env.OB_TOUCH_TAG_WINDOW ||
 const symFilter  = () => (process.env.OB_TOUCH_SYMBOLS || '')
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 
+const VALID_MODES = ['touch', 'magnet', 'barrier', 'align'];
+
+// Per-symbol mode map, e.g. OB_PATH_MODE_MAP="SOLUSDT:align,BTCUSDT:touch,ETHUSDT:off".
+function parseModeMap() {
+  const map = {};
+  for (const pair of (process.env.OB_PATH_MODE_MAP || '').split(',')) {
+    const [sym, mode] = pair.split(':').map(s => (s || '').trim());
+    if (sym && mode) map[sym.toUpperCase()] = mode.toLowerCase();
+  }
+  return map;
+}
+
+// Resolve the OB-path mode for a symbol: the per-symbol map wins; otherwise the
+// global OB_PATH_MODE (optionally restricted to OB_TOUCH_SYMBOLS). 'off'/'none'/
+// unset/invalid → null (no gate for that symbol).
+function resolveMode(symbol) {
+  const s = String(symbol || '').toUpperCase();
+  const map = parseModeMap();
+  if (s in map) return VALID_MODES.includes(map[s]) ? map[s] : null;   // 'off' → null
+  const g = String(process.env.OB_PATH_MODE || '').toLowerCase();
+  if (!VALID_MODES.includes(g)) return null;
+  const syms = symFilter();
+  if (syms.length && !syms.includes(s)) return null;                   // global restricted
+  return g;
+}
+
 // detectOrderBlocks needs bullish/body/range; fetchCandlesUpTo (backtest) omits them.
 function normalize(c) {
   if (c.bullish !== undefined && c.body !== undefined) return c;
@@ -209,14 +235,12 @@ function decideByMode(mode, { direction, price, obs, recentHigh = null, recentLo
 // it needs and applies decideByMode. Async + fail-open, like evaluateShortOBTouch.
 // mode: 'touch' | 'magnet' | 'barrier' | 'align' (default from OB_PATH_MODE).
 async function evaluateOBMode({ symbol, direction, price = null, mode = null, candlesByTf = null } = {}) {
-  const m = String(mode || process.env.OB_PATH_MODE || '').toLowerCase();
-  if (!['touch', 'magnet', 'barrier', 'align'].includes(m))
-    return { allow: true, checked: false, reasons: ['ob-path mode off/unknown'] };
+  // Explicit mode wins (tests/sim); otherwise resolve per-symbol (map → global).
+  const m = mode ? String(mode).toLowerCase() : resolveMode(symbol);
+  if (!VALID_MODES.includes(m))
+    return { allow: true, checked: false, mode: null, reasons: ['ob-path mode off for this symbol'] };
   const dir = String(direction || '').toUpperCase();
-  if (dir !== 'LONG' && dir !== 'SHORT') return { allow: true, checked: false, reasons: ['unknown direction'] };
-  const syms = symFilter();
-  if (syms.length && !syms.includes(String(symbol || '').toUpperCase()))
-    return { allow: true, checked: false, reasons: ['symbol not in OB_TOUCH_SYMBOLS'] };
+  if (dir !== 'LONG' && dir !== 'SHORT') return { allow: true, checked: false, mode: m, reasons: ['unknown direction'] };
 
   try {
     const smc = require('./smc-engine');
@@ -225,18 +249,17 @@ async function evaluateOBMode({ symbol, direction, price = null, mode = null, ca
     for (const [tf, lim] of tfs) arrs[tf] = (candlesByTf && candlesByTf[tf]) || await smc.fetchCandles(symbol, tf, lim);
 
     const c15 = (arrs['15'] || []).map(normalize);
-    if (c15.length < 40) return { allow: true, checked: false, reasons: ['too few 15m candles — fail-open'] };
+    if (c15.length < 40) return { allow: true, checked: false, mode: m, reasons: ['too few 15m candles — fail-open'] };
     const px = price != null ? Number(price) : c15[c15.length - 1].c;
     const win = c15.slice(-tagWindow());
     const recentHigh = Math.max(...win.map(c => c.h));
     const recentLow  = Math.min(...win.map(c => c.l));
 
     if (m === 'touch') {
-      if (dir !== 'SHORT') return { allow: true, checked: false, reasons: ['touch mode is SHORT-only'] };
+      if (dir !== 'SHORT') return { allow: true, checked: false, mode: m, reasons: ['touch mode is SHORT-only'] };
       const st = smc.analyzeStructure(c15, 10, 3);
       const d = decideShortFromOBs(smc.detectOrderBlocks(c15, st.pivots) || [], px, { recentHigh, tol: maxDist() });
-      return d.allow ? { allow: true, checked: true, reasons: [d.reason] }
-                     : { allow: false, checked: true, reason: d.reason, reasons: [d.reason] };
+      return { allow: d.allow, checked: true, mode: m, reason: d.reason, reasons: [d.reason] };
     }
 
     let merged = [];
@@ -248,14 +271,14 @@ async function evaluateOBMode({ symbol, direction, price = null, mode = null, ca
     }
     const maxRangePct = (Number(process.env.OB_PATH_MAX_RANGE_PCT || 3) || 3) / 100;
     const d = decideByMode(m, { direction: dir, price: px, obs: merged, recentHigh, recentLow, maxRangePct });
-    return d.allow ? { allow: true, checked: true, reasons: [d.reason] }
-                   : { allow: false, checked: true, reason: d.reason, reasons: [d.reason] };
+    return { allow: d.allow, checked: true, mode: m, reason: d.reason, reasons: [d.reason] };
   } catch (e) {
-    return { allow: true, checked: false, reasons: [`ob-path error — fail-open: ${e.message}`] };
+    return { allow: true, checked: false, mode: m, reasons: [`ob-path error — fail-open: ${e.message}`] };
   }
 }
 
 module.exports = {
   evaluateShortOBTouch, decideShortFromOBs, normalize,
   classifyOBs, nearestOB, decideByMode, evaluateOBMode,
+  resolveMode, parseModeMap,
 };

@@ -1655,12 +1655,13 @@ async function main() {
       }
 
       // ── OB-PATH MODE GATE — multi-timeframe nearest-OB filter, both directions ──
-      // Unified switch for the mode that wins backtest-ob-touch-sim.js:
-      //   OB_PATH_MODE = touch | magnet | barrier | align   (unset = off)
+      // Per-symbol switch for the mode that wins backtest-ob-touch-sim.js:
+      //   OB_PATH_MODE_MAP = "SOLUSDT:align,BTCUSDT:touch,ETHUSDT:off"  (per-coin)
+      //   OB_PATH_MODE     = align | touch | barrier | magnet          (global default)
       // Scans OBs on 15m/1h/4h, finds the nearest, and blocks entries per the
-      // chosen rule. Env-gated (off unless OB_PATH_MODE set), TV-override bypass,
+      // resolved rule ('off'/unset = no gate for that symbol). TV-override bypass,
       // fails OPEN on any error. Applies to LONG and SHORT.
-      if (process.env.OB_PATH_MODE
+      if ((process.env.OB_PATH_MODE || process.env.OB_PATH_MODE_MAP)
           && !(pick.source === 'tradingview' && pick.override === true)) {
         try {
           const { evaluateOBMode } = require('./ob-touch');
@@ -1670,10 +1671,10 @@ async function main() {
             price: pick.price || pick.entry || null,
           });
           if (!pathGate.allow) {
-            bLog.trade(`OB-PATH BLOCK [${process.env.OB_PATH_MODE}]: ${pick.symbol} ${pick.direction} — ${pathGate.reason}`);
+            bLog.trade(`OB-PATH BLOCK [${pathGate.mode}]: ${pick.symbol} ${pick.direction} — ${pathGate.reason}`);
             continue;
           }
-          if (pathGate.checked) bLog.trade(`OB-PATH OK [${process.env.OB_PATH_MODE}]: ${pick.symbol} ${pick.direction} — ${pathGate.reasons[pathGate.reasons.length - 1]}`);
+          if (pathGate.checked) bLog.trade(`OB-PATH OK [${pathGate.mode}]: ${pick.symbol} ${pick.direction} — ${pathGate.reasons[pathGate.reasons.length - 1]}`);
         } catch (e) {
           bLog.error(`ob-path error (fail-open, trade allowed): ${e.message}`);
         }
