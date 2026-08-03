@@ -15,7 +15,11 @@ on:
       symbols:
         description: 'Symbols to evaluate (comma-separated)'
         required: false
-        default: 'SOLUSDT'
+        default: 'SOLUSDT,BTCUSDT,ETHUSDT,BNBUSDT'
+      weeks:
+        description: 'Sim look-back window in weeks (static-klines data)'
+        required: false
+        default: '30'
       max_dist_pct:
         description: 'OB_TOUCH_MAX_DIST_PCT — band around the OB top, in %'
         required: false
@@ -54,15 +58,24 @@ jobs:
       - name: Install Railway CLI
         run: npm i -g @railway/cli@latest
 
-      - name: Mode leaderboard (DB-free sim, klines only)
+      - name: Per-symbol mode leaderboard (DB-free sim)
         id: sim
         run: |
           set +e
-          # No DB needed — reads Bybit klines directly (Actions runners have egress).
-          SYMBOL="$(echo "${{ inputs.symbols }}" | cut -d, -f1)" \
-          OB_TOUCH_MAX_DIST_PCT="${{ inputs.max_dist_pct }}" \
-          OB_TOUCH_TAG_WINDOW="${{ inputs.tag_window }}" \
-            node backtest-ob-touch-sim.js > /tmp/sim.txt 2> /tmp/simerr.txt
+          # No DB needed — reads the static-klines dataset via raw.githubusercontent.com.
+          : > /tmp/sim.txt
+          IFS=',' read -ra SYMS <<< "${{ inputs.symbols }}"
+          for s in "${SYMS[@]}"; do
+            s="$(echo "$s" | tr -d '[:space:]')"
+            [ -z "$s" ] && continue
+            echo "───────── $s (${{ inputs.weeks }}w) ─────────" >> /tmp/sim.txt
+            KLINES_SOURCE=static SYMBOL="$s" WEEKS_15M="${{ inputs.weeks }}" \
+            OB_TOUCH_MAX_DIST_PCT="${{ inputs.max_dist_pct }}" \
+            OB_TOUCH_TAG_WINDOW="${{ inputs.tag_window }}" \
+              node backtest-ob-touch-sim.js 2>>/tmp/simerr.txt \
+              | grep -E "Source:|^mode |^baseline|^align|^touch|^barrier|^magnet|Best filter" >> /tmp/sim.txt
+            echo "" >> /tmp/sim.txt
+          done
           echo "sim_rc=$?" >> "$GITHUB_OUTPUT"
 
       - name: Run OB-touch backtest with Railway env injected
@@ -83,10 +96,11 @@ jobs:
             echo ""
             echo "\`days=${{ inputs.days }} symbols=${{ inputs.symbols }} max_dist=${{ inputs.max_dist_pct }}% tag_window=${{ inputs.tag_window }}\`"
             echo ""
-            echo "### Mode leaderboard — which entry filter is best (DB-free sim)"
+            echo "### Per-symbol mode leaderboard — which entry filter is best (DB-free sim, ${{ inputs.weeks }}w)"
+            echo "_Suggested map from the winners: set \`OB_PATH_MODE_MAP\` to \`SYMBOL:mode\` per coin (\`off\` when no filter beats baseline)._"
             echo '```'
-            tail -n 40 /tmp/sim.txt
-            [ -s /tmp/simerr.txt ] && { echo "-- stderr --"; tail -n 20 /tmp/simerr.txt; }
+            tail -n 160 /tmp/sim.txt
+            [ -s /tmp/simerr.txt ] && { echo "-- stderr (tail) --"; tail -n 15 /tmp/simerr.txt; }
             echo '```'
             echo ""
             echo "### Real-fills replay (touch gate, needs DB)"
