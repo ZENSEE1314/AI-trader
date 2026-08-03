@@ -1628,6 +1628,58 @@ async function main() {
         }
       }
 
+      // ── OB-TOUCH SHORT GATE — env-gated, default OFF, SHORT-only ──
+      // "The OB on top should get hit first." Blocks shorts taken in the middle
+      // of a range with unmitigated bearish supply still overhead — requires the
+      // entry to sit AT a tagged bearish order block. Inert unless
+      // OB_TOUCH_SHORTS_ENABLED=1; TV override bypasses it; fails OPEN on any
+      // error; never touches LONGs. Backtest with backtest-ob-touch.js first.
+      if (process.env.OB_TOUCH_SHORTS_ENABLED === '1'
+          && String(pick.direction || '').toUpperCase() === 'SHORT'
+          && !(pick.source === 'tradingview' && pick.override === true)) {
+        try {
+          const { evaluateShortOBTouch } = require('./ob-touch');
+          const obGate = await evaluateShortOBTouch({
+            symbol: pick.symbol || pick.sym,
+            direction: pick.direction,
+            price: pick.price || pick.entry || null,
+          });
+          if (!obGate.allow) {
+            bLog.trade(`OB-TOUCH BLOCK: ${pick.symbol} SHORT — ${obGate.reason}`);
+            continue;
+          }
+          if (obGate.checked) bLog.trade(`OB-TOUCH OK: ${pick.symbol} SHORT — ${obGate.reasons[obGate.reasons.length - 1]}`);
+        } catch (e) {
+          bLog.error(`ob-touch error (fail-open, trade allowed): ${e.message}`);
+        }
+      }
+
+      // ── OB-PATH MODE GATE — multi-timeframe nearest-OB filter, both directions ──
+      // Per-symbol switch for the mode that wins backtest-ob-touch-sim.js:
+      //   OB_PATH_MODE_MAP = "SOLUSDT:align,BTCUSDT:touch,ETHUSDT:off"  (per-coin)
+      //   OB_PATH_MODE     = align | touch | barrier | magnet          (global default)
+      // Scans OBs on 15m/1h/4h, finds the nearest, and blocks entries per the
+      // resolved rule ('off'/unset = no gate for that symbol). TV-override bypass,
+      // fails OPEN on any error. Applies to LONG and SHORT.
+      if ((process.env.OB_PATH_MODE || process.env.OB_PATH_MODE_MAP)
+          && !(pick.source === 'tradingview' && pick.override === true)) {
+        try {
+          const { evaluateOBMode } = require('./ob-touch');
+          const pathGate = await evaluateOBMode({
+            symbol: pick.symbol || pick.sym,
+            direction: pick.direction,
+            price: pick.price || pick.entry || null,
+          });
+          if (!pathGate.allow) {
+            bLog.trade(`OB-PATH BLOCK [${pathGate.mode}]: ${pick.symbol} ${pick.direction} — ${pathGate.reason}`);
+            continue;
+          }
+          if (pathGate.checked) bLog.trade(`OB-PATH OK [${pathGate.mode}]: ${pick.symbol} ${pick.direction} — ${pathGate.reasons[pathGate.reasons.length - 1]}`);
+        } catch (e) {
+          bLog.error(`ob-path error (fail-open, trade allowed): ${e.message}`);
+        }
+      }
+
       // ── TradingView MANUAL OVERRIDE ────────────────────────────
       // If user sends override=true from TV webhook, bypass ALL gates
       // and execute immediately. Log it loud for audit trail.
