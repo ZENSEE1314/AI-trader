@@ -16,8 +16,13 @@
 // TP/SL are detected at 15m resolution; no fees/slippage. Treat R multiples as
 // the headline; a real fill will be a touch worse.
 
+const fs = require('fs');
 const { fetchCandlesUpTo } = require('./trade-deep-analysis');
 const msob = require('./strategy-ms-ob-vwap');
+
+// KLINES_FILE = run offline from a msob-collect.js dump (no network needed).
+const KFILE = process.env.KLINES_FILE || '';
+const FILEDATA = KFILE ? JSON.parse(fs.readFileSync(KFILE, 'utf8')) : null;
 
 const DAYS = Math.max(5, parseInt(process.env.DAYS || '60', 10) || 60);
 const SYMS = (process.env.SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT')
@@ -40,11 +45,16 @@ async function fetchLong(sym, tf, targetBars) {
   return [...map.values()].sort((a, b) => a.t - b.t);
 }
 
+async function getSeries(sym, tf, bars) {
+  if (FILEDATA) return (FILEDATA.data?.[sym]?.[tf]) || [];
+  return fetchLong(sym, tf, bars);
+}
+
 async function backtestSymbol(sym) {
   const [c15, c1h, c4h] = await Promise.all([
-    fetchLong(sym, TF.m15, DAYS * 96 + 220),
-    fetchLong(sym, TF.h1,  DAYS * 24 + 160),
-    fetchLong(sym, TF.h4,  DAYS * 6  + 160),
+    getSeries(sym, TF.m15, DAYS * 96 + 220),
+    getSeries(sym, TF.h1,  DAYS * 24 + 160),
+    getSeries(sym, TF.h4,  DAYS * 6  + 160),
   ]);
   if (c15.length < 300 || c1h.length < 60 || c4h.length < 60) {
     return { sym, error: `insufficient history (15m=${c15.length}, 1h=${c1h.length}, 4h=${c4h.length})` };
