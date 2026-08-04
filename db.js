@@ -778,7 +778,7 @@ async function initAllTables() {
          ('ETHUSDT',  100, true),
          ('BNBUSDT',  100, true),
          ('ADAUSDT',   75, true),
-         ('SOLUSDT',   75, true),
+         ('SOLUSDT',   25, true),
          ('AVAXUSDT',  75, true)
        ON CONFLICT (symbol) DO UPDATE SET leverage = EXCLUDED.leverage, enabled = true`
     );
@@ -1017,7 +1017,8 @@ async function initAllTables() {
   } catch (e) { console.warn('[DB] capital_percentage fix warning:', e.message); }
 
   // Fix: enforce correct leverage in token_leverage table on every boot.
-  // BNBUSDT, BTCUSDT, ETHUSDT = 100x | ADAUSDT, SOLUSDT = 75x
+  // BNBUSDT, BTCUSDT, ETHUSDT = 100x | ADAUSDT = 75x | SOLUSDT = 25x
+  // SOL cut 75x→25x (2026-08-04): 75x stopped out on tick noise (flat −3.75% loss).
   // Any wrong value here (e.g. 20x set by mistake) overrides SYMBOL_LEVERAGE constant.
   // ON CONFLICT(symbol) DO UPDATE ensures we correct existing wrong values.
   try {
@@ -1028,7 +1029,7 @@ async function initAllTables() {
         ('ETHUSDT', 100, true),
         ('BNBUSDT', 100, true),
         ('ADAUSDT',  75, true),
-        ('SOLUSDT',  75, true)
+        ('SOLUSDT',  25, true)
       ON CONFLICT (symbol) DO UPDATE
         SET leverage = EXCLUDED.leverage,
             enabled  = true
@@ -1076,7 +1077,7 @@ async function initAllTables() {
         ('lev_BTCUSDT',    '100'),
         ('lev_ETHUSDT',    '100'),
         ('lev_BNBUSDT',    '100'),
-        ('lev_SOLUSDT',    '75'),
+        ('lev_SOLUSDT',    '25'),
         ('lev_ADAUSDT',    '75'),
         ('sl_trail_pct',   '1.2'),
         ('pivot_lb_l',     '5'),

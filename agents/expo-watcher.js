@@ -189,10 +189,15 @@ const HEARTBEAT_MS = 5 * 60 * 1000;        // explain silent/no-trade periods
 const STALE_TV_MS  = 12 * 60 * 1000;       // reconnect if TradingView study stops updating
 const LEVERAGE     = Number(process.env.EXPO_LEVERAGE || 50);   // fallback leverage for any coin without an override
 const SL_MARGIN    = 0.50;                 // fallback hard SL −50% of margin
-// Per-coin config (owner 2026-08-03). SOL: 75x, 30% SL, VWAP-zone entry (1-2σ from
-// VWAP). ETH: 50x, 40% SL, base entry (no zone). Executor honors signal.leverage +
-// signal.slMarginFrac (cycle.js:2174/2224), so per-coin lev/SL is set in the signal.
-const LEV_BY_SYM       = { SOLUSDT: 75, ETHUSDT: 50 };
+// Per-coin config. SOL: 25x, 30% SL, VWAP-zone entry (1-2σ from VWAP). ETH: 50x,
+// 40% SL, base entry (no zone). Executor honors signal.leverage + signal.slMarginFrac
+// (cycle.js:2174/2224), so per-coin lev/SL is set in the signal.
+//
+// SOL cut 75x→25x (2026-08-04): at 75x the SL price-distance was 0.30/75 = 0.40%,
+// so normal tick noise stopped it out (see the −3.75% flat SOL loss where entry ==
+// exit — pure noise + fees). 25x widens the stop to 0.30/25 = 1.20% so it can
+// breathe, and shrinks fee/noise drag on ROI ~3x.
+const LEV_BY_SYM       = { SOLUSDT: 25, ETHUSDT: 50 };
 const SL_MARGIN_BY_SYM = { SOLUSDT: 0.30, ETHUSDT: 0.40 };
 const VWAP_ZONE_BY_SYM = { SOLUSDT: true, ETHUSDT: false };   // true = tight 1-2σ zone; false = base gate
 const levOf = (sym) => LEV_BY_SYM[sym] || LEVERAGE;
