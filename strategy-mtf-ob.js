@@ -47,6 +47,14 @@ function labelPivots(pivots) {
 const inOB = (obs, price, kind) => (obs || []).find(o =>
   o.kind === kind && price >= o.bottom * (1 - OB_TOL) && price <= o.top * (1 + OB_TOL)) || null;
 
+// HTF short-gate (owner rule): when 4h AND 1h are BOTH bullish (HH/HL), only shorts
+// are allowed — block longs. Any other HTF state imposes no restriction. Pure/testable.
+function htfShortGateAllows(dir, bias4h, bias1h) {
+  const bothBull = bias4h === 'BULLISH' && bias1h === 'BULLISH';
+  if (bothBull && String(dir || '').toUpperCase() === 'LONG') return false;
+  return true;
+}
+
 // ── Pure decision: given the latest labeled 15m pivot, current price, HTF OBs and
 // the profile, is there an in-zone candidate? Returns {direction, label, ob} | null.
 // No I/O — unit-testable (see --selftest).
@@ -89,8 +97,9 @@ async function scanMtfOb(log = () => {}) {
 
   for (const symbol of syms) {
     try {
-      const [c15, c4h, c1d] = await Promise.all([
+      const [c15, c1h, c4h, c1d] = await Promise.all([
         smc.fetchCandles(symbol, '15', 200),
+        smc.fetchCandles(symbol, '60', 300),
         smc.fetchCandles(symbol, '240', 300),
         smc.fetchCandles(symbol, 'D', 300),
       ]);
@@ -115,6 +124,16 @@ async function scanMtfOb(log = () => {}) {
 
       const cand = mtfCandidate({ lastPivot, price, obs, profile, climaxRatio, climaxMin });
       if (!cand) continue;
+
+      // HTF short-gate: 4h AND 1h both bullish (HH/HL) → shorts only, block longs.
+      if (process.env.MTF_OB_HTF_SHORTGATE !== '0') {
+        const bias4h = (c4h && c4h.length >= 40) ? smc.analyzeStructure(c4h, 10, 3).bias : 'RANGING';
+        const bias1h = (c1h && c1h.length >= 40) ? smc.analyzeStructure(c1h, 10, 3).bias : 'RANGING';
+        if (!htfShortGateAllows(cand.direction, bias4h, bias1h)) {
+          log(`[MTF-OB] ${symbol} ${cand.direction} blocked — 4h(${bias4h})+1h(${bias1h}) bullish = shorts only`);
+          continue;
+        }
+      }
 
       // entry-TF (3m) confirmation + tight stop
       const trig = await refineEntry({ symbol, direction: cand.direction });
@@ -151,7 +170,7 @@ async function scanMtfOb(log = () => {}) {
   return picks;
 }
 
-module.exports = { scanMtfOb, mtfCandidate, labelPivots };
+module.exports = { scanMtfOb, mtfCandidate, labelPivots, htfShortGateAllows };
 
 // ── Offline self-test of the pure candidate logic ──
 if (require.main === module && process.argv.includes('--selftest')) {
@@ -178,6 +197,11 @@ if (require.main === module && process.argv.includes('--selftest')) {
   chk('climax LOW in bull OB → LONG', mtfCandidate({ lastPivot: { type: 'LOW', label: 'LL', price: 100 }, price: 100, obs: bullOB, profile: 'climax', climaxRatio: 4.0, climaxMin: 3.0 })?.direction, 'LONG');
   // No climax (2.0 < 3.0 min) → blocked even at the OB.
   chk('no climax → blocked', mtfCandidate({ lastPivot: { type: 'HIGH', label: 'HH', price: 110 }, price: 110, obs: bearOB, profile: 'climax', climaxRatio: 2.0, climaxMin: 3.0 }), null);
+  // ── HTF short-gate: 4h+1h both bullish → shorts only ──
+  chk('long blocked when 4h+1h bullish', htfShortGateAllows('LONG', 'BULLISH', 'BULLISH'), false);
+  chk('short allowed when 4h+1h bullish', htfShortGateAllows('SHORT', 'BULLISH', 'BULLISH'), true);
+  chk('long allowed when only 4h bullish', htfShortGateAllows('LONG', 'BULLISH', 'RANGING'), true);
+  chk('long allowed when both bearish', htfShortGateAllows('LONG', 'BEARISH', 'BEARISH'), true);
   console.log(`\nself-test: ${pass} passed, ${fail} failed`);
   process.exitCode = fail ? 1 : 0;
 }
