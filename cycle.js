@@ -231,6 +231,10 @@ const _signalLossTracker = new Map();
 //    50x: price SL = 0.15/50  = 0.30% price move → 15% capital loss
 const SL_PCT = 0.50;   // 50% max trade-margin loss at any leverage
 const TP_PCT = 0.75;   // 75% trade-margin target
+// MASTER KILL SWITCH (owner 2026-08-06): all AI trade ENTRIES are OFF by default.
+// executeForAllUsers returns early unless AI_TRADING_ENABLED=1. Exits/position
+// management still run so nothing is stranded. Set AI_TRADING_ENABLED=1 to resume.
+const AI_TRADING_ENABLED = process.env.AI_TRADING_ENABLED === '1';
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
 // Admin activates a backtest version via the UI → params saved to settings.
@@ -1914,6 +1918,10 @@ const _openTradeInProgress = new Set(); // key: `${userId}:${symbol}`
 
 // ── MULTI-USER TRADE EXECUTION ──────────────────────────────
 async function executeForAllUsers(pick) {
+  if (!AI_TRADING_ENABLED) {
+    bLog.trade(`[AI-OFF] entry blocked: ${pick?.symbol || '?'} ${pick?.direction || ''} ${pick?.setupName || pick?.setup || ''} — AI trading disabled by owner (set AI_TRADING_ENABLED=1 to resume)`);
+    return 'AI_OFF';
+  }
   let db, cryptoUtils, BitunixClient;
   try {
     db = require('./db');
