@@ -202,6 +202,17 @@ const SL_MARGIN_BY_SYM = { SOLUSDT: 0.30, ETHUSDT: 0.40 };
 const VWAP_ZONE_BY_SYM = { SOLUSDT: true, ETHUSDT: false };   // true = tight 1-2σ zone; false = base gate
 const levOf = (sym) => LEV_BY_SYM[sym] || LEVERAGE;
 const slMarginOf = (sym) => SL_MARGIN_BY_SYM[sym] ?? SL_MARGIN;
+// 1h-trend filter (owner 2026-08-06): only trade WITH the 1h structure — long only when
+// the latest 1h low is a HL (uptrend), short only when the latest 1h high is a LH
+// (downtrend). Backtest: ETH +$1,937→+$2,446/90d, SOL +$1,197→+$1,344. Env HTF_TREND=0 off.
+const HTF_TREND = process.env.HTF_TREND !== '0';
+const _htf1h = {};   // sym → { high: 'HH'|'LH'|null, low: 'HL'|'LL'|null } (latest 1h labels)
+const htf1hAllows = (sym, dir) => {
+  if (!HTF_TREND) return true;
+  const h = _htf1h[sym];
+  if (!h) return true;   // 1h not loaded yet (startup) — don't block
+  return dir === 'LONG' ? h.low === 'HL' : h.high === 'LH';
+};
 const BYBIT_URL    = 'https://api.bybit.com/v5/market/kline';
 
 // ── Shared state ─────────────────────────────────────────────────
@@ -469,6 +480,13 @@ function watch15m(client, ind, tvTicker) {
           bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${vwap.reason}; ${newest.dir} requires 15m VWAP trend alignment`);
           return;
         }
+        // 1h-trend filter: only trade WITH the 1h structure (no counter-trend entries).
+        if (!htf1hAllows(sym, newest.dir)) {
+          delete biasMap[sym];
+          const h = _htf1h[sym] || {};
+          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: 1h trend disallows ${newest.dir} (1h low=${h.low || '?'} high=${h.high || '?'})`);
+          return;
+        }
         // Power-confirmation gate — evaluated ONCE, here, on the label's own pivot
         // bar (closed → complete flow). Fail = no window opens at all, so the 1m
         // scanner never re-rolls the dice on later bars. Backtest: this one-shot
@@ -572,6 +590,33 @@ function watchDiag1m(client, ind, tvTicker) {
   });
 }
 
+// 1h Expo study → tracks the latest 1h high-label (HH/LH) and low-label (HL/LL) so the
+// 15m entry can gate on the 1h trend (long only under a 1h HL, short only under a 1h LH).
+function watchHtf1h(client, ind, tvTicker) {
+  const sym = normSym(tvTicker);
+  const chart = new client.Session.Chart();
+  chart.setMarket(tvTicker, { timeframe: '60', range: HISTORY_BARS });
+  const study = new chart.Study(ind);
+  study.onError((...e) => bLog(`[${sym}][1h] HTF study error: ${e.join(' ')}`));
+  study.onUpdate(() => {
+    try {
+      const labels  = (study.graphic && study.graphic.labels) || [];
+      const periods = chart.periods || [];
+      if (!labels.length || !periods.length) return;
+      let hi = null, lo = null, hiT = 0, loT = 0;
+      for (const l of labels) {
+        if (l.x == null || !/^(HH|HL|LH|LL)$/.test(l.text || '')) continue;
+        const bar = periods[l.x];
+        if (!bar) continue;
+        const t = bar.time * 1000;
+        if ((l.text === 'HH' || l.text === 'LH') && t > hiT) { hiT = t; hi = l.text; }
+        if ((l.text === 'HL' || l.text === 'LL') && t > loT) { loT = t; lo = l.text; }
+      }
+      _htf1h[sym] = { high: hi, low: lo };
+    } catch (e) { bLog(`[${sym}][1h] HTF error: ${e.message}`); }
+  });
+}
+
 function connectAll(ind) {
   if (_client) { try { _client.end(); } catch (_) {} }
   const client = new TradingView.Client({ token: process.env.TV_SESSION || '', signature: process.env.TV_SESSION_SIGN || '' });
@@ -586,8 +631,11 @@ function connectAll(ind) {
     if (diag1m) {
       try { watchDiag1m(client, ind, tv); } catch (e) { bLog(`[${normSym(tv)}][1m] DIAG watch failed: ${e.message}`); }
     }
+    if (HTF_TREND) {
+      try { watchHtf1h(client, ind, tv); } catch (e) { bLog(`[${normSym(tv)}][1h] HTF watch failed: ${e.message}`); }
+    }
   }
-  bLog(`Watching ${TV_SYMBOLS.map(normSym).join('/')} on one TV client${diag1m ? ' (+1m DIAG)' : ''}`);
+  bLog(`Watching ${TV_SYMBOLS.map(normSym).join('/')} on one TV client${diag1m ? ' (+1m DIAG)' : ''}${HTF_TREND ? ' (+1h trend filter)' : ''}`);
 }
 
 // ── 1m entry scan loop (native Bybit) ────────────────────────────
@@ -726,6 +774,7 @@ function getStatus() {
       labelMaxAgeMin: LABEL_MAX_AGE_MS / 60000, entryWindowMin: WINDOW_MS / 60000,
       leverage: LEVERAGE, slMargin: SL_MARGIN,
       perCoin: [...ENTRY_SYMBOLS].reduce((o, s) => { o[s] = { lev: levOf(s), slMargin: slMarginOf(s), vwapZone: !!VWAP_ZONE_BY_SYM[s] }; return o; }, {}),
+      htf1hFilter: HTF_TREND, htf1h: _htf1h,
       powerGate: POWER_GATE, powerTh: POWER_TH, powerLowTh: POWER_LOW_TH, powerAt: 'label',
     },
     tvConnected: !!_client,
