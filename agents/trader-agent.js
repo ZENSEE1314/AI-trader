@@ -88,7 +88,9 @@ class TraderAgent extends BaseAgent {
     // Map: symbol (ETHUSDT) → closedAt timestamp (ms)
     // Persisted in-memory; also checked against DB on each signal so restarts are safe.
     this._closedAt = new Map(); // symbol → Date.now() when trade closed
-    this.CLOSE_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+    // Shared with the central cooldown in cycle.js executeForAllUsers via the
+    // same env var so both layers agree. Default 60 min.
+    this.CLOSE_COOLDOWN_MS = parseInt(process.env.POST_CLOSE_COOLDOWN_MIN || '60', 10) * 60 * 1000;
 
     this._profile = {
       description: 'Executes approved trades on Binance & Bitunix for all users, manages trailing stops and position sync.',
@@ -205,6 +207,7 @@ class TraderAgent extends BaseAgent {
               // Give exchange 2s to settle the close before opening the new side
               await new Promise(r => setTimeout(r, 2000));
               isReversalEntry = true; // bypass post-close cooldown for this entry
+              pick.bypassCooldown = true; // also bypass the central cooldown in executeForAllUsers
             } catch (closeErr) {
               this.logTrade(`${pick.symbol} reversal close failed: ${closeErr.message} — skipping new entry`);
               this.tradesSkipped++;
@@ -288,6 +291,12 @@ class TraderAgent extends BaseAgent {
         this.addActivity('trade', `Executing ${pick.symbol} ${pick.direction} for users...`);
         const result = await executeForAllUsers(pick);
 
+        if (result === 'COOLDOWN') {
+          this.logTrade(`${pick.symbol} in post-close cooldown — skipping re-entry`);
+          this.tradesSkipped++;
+          this.addActivity('skip', `${pick.symbol} post-close cooldown — waiting for next entry`);
+          continue;
+        }
         if (result === 'ALL_TOO_EXPENSIVE') {
           this.logTrade(`${pick.symbol} too expensive for all users — trying next`);
           this.tradesSkipped++;
