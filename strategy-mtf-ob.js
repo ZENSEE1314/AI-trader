@@ -10,10 +10,17 @@
 //  entry-TF (default 3m) confirms with a CHoCH; short mirrors with a 15m LH in a
 //  bearish (supply) OB. TP = the opposite liquidity. SL = the entry-TF swing.
 //
+//  The 'climax' profile is the owner's VSA method: an extreme TAPS an OB and prints
+//  a volume climax (big orders) → fade it to the opposite OB. Direction comes from
+//  the OB (a climax HH into supply = SHORT), and a ≥3× volume climax is required —
+//  backtest: 78% WR at ≥3× vs 58% for all OB taps (a blanket VSA gate hurt; the
+//  climax AT the OB is what works).
+//
 //  OFF by default — cycle.js only scans this when MTF_OB_ENABLED=1. Env:
 //    MTF_OB_ENABLED=1            master switch (default off)
 //    MTF_OB_SYMBOLS=ETHUSDT      symbols to scan (default ETHUSDT — where it backtests best)
-//    MTF_OB_PROFILE=pullback     pullback (HL/LH) | breakout (HH/LL) | any
+//    MTF_OB_PROFILE=climax       climax (owner's VSA fade) | pullback (HL/LH) | breakout (HH/LL) | any
+//    MTF_OB_CLIMAX_MIN=3         pivot-bar volume ≥ N× its 20-bar avg (default 3 for climax, else off)
 //    MTF_OB_PIVOT_MAXAGE=8       max 15m bars since the pivot confirmed (freshness)
 //    ENTRY_TF=3                  entry timeframe for the CHoCH (mtf-entry.js)
 // ════════════════════════════════════════════════════════════════════════════
@@ -43,8 +50,22 @@ const inOB = (obs, price, kind) => (obs || []).find(o =>
 // ── Pure decision: given the latest labeled 15m pivot, current price, HTF OBs and
 // the profile, is there an in-zone candidate? Returns {direction, label, ob} | null.
 // No I/O — unit-testable (see --selftest).
-function mtfCandidate({ lastPivot, price, obs, profile = 'pullback' }) {
+function mtfCandidate({ lastPivot, price, obs, profile = 'pullback', climaxRatio = null, climaxMin = 0 }) {
   if (!lastPivot || !lastPivot.label) return null;
+  // VSA climax gate: when configured, the pivot bar must be a volume climax
+  // (big orders). Backtest: ≥3× avg at an OB → ~78% WR (owner's method).
+  if (climaxMin > 0 && (climaxRatio == null || climaxRatio < climaxMin)) return null;
+
+  // 'climax' profile — the owner's fade: an extreme that TAPS an OB and prints a
+  // climax reverses to the opposite OB. Direction comes from the OB, not the label:
+  // a HIGH into a supply OB → SHORT; a LOW into a demand OB → LONG (so a climax HH
+  // into supply is a short, which the label-based profiles would never take).
+  if (profile === 'climax') {
+    if (lastPivot.type === 'HIGH') { const ob = inOB(obs, price, 'BEARISH'); if (ob) return { direction: 'SHORT', label: lastPivot.label, ob }; }
+    if (lastPivot.type === 'LOW')  { const ob = inOB(obs, price, 'BULLISH'); if (ob) return { direction: 'LONG',  label: lastPivot.label, ob }; }
+    return null;
+  }
+
   const lbl = lastPivot.label;
   if (!profileLabels(profile).includes(lbl)) return null;
   if (BULL.has(lbl)) { const ob = inOB(obs, price, 'BULLISH'); if (ob) return { direction: 'LONG', label: lbl, ob }; }
@@ -59,6 +80,10 @@ async function scanMtfOb(log = () => {}) {
   const { refineEntry } = require('./mtf-entry');
   const profile = (process.env.MTF_OB_PROFILE || 'pullback').toLowerCase();
   const maxAge = Math.max(1, parseInt(process.env.MTF_OB_PIVOT_MAXAGE || '8', 10) || 8);
+  // VSA climax: require the pivot bar to be ≥ this × its 20-bar avg volume.
+  // Default 3.0 for the 'climax' profile (backtest ~78% WR), off otherwise.
+  const climaxMin = Number(process.env.MTF_OB_CLIMAX_MIN ?? (profile === 'climax' ? 3.0 : 0)) || 0;
+  const CLIMAX_N = 20;
   const syms = (process.env.MTF_OB_SYMBOLS || 'ETHUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   const picks = [];
 
@@ -83,21 +108,28 @@ async function scanMtfOb(log = () => {}) {
         ...classifyOBs(smc.detectOrderBlocks(c4h, smc.analyzeStructure(c4h, 10, 3).pivots), '4h'),
         ...classifyOBs(smc.detectOrderBlocks(c1d, smc.analyzeStructure(c1d, 10, 3).pivots), '1d'),
       ];
-      const cand = mtfCandidate({ lastPivot, price, obs, profile });
+      // VSA climax ratio on the pivot bar (big orders).
+      let vv = 0, kk = 0; for (let j = lastPivot.idx - 1; j >= 0 && kk < CLIMAX_N; j--, kk++) vv += c15[j].v;
+      const cavg = kk ? vv / kk : 0;
+      const climaxRatio = cavg ? c15[lastPivot.idx].v / cavg : 0;
+
+      const cand = mtfCandidate({ lastPivot, price, obs, profile, climaxRatio, climaxMin });
       if (!cand) continue;
 
       // entry-TF (3m) confirmation + tight stop
       const trig = await refineEntry({ symbol, direction: cand.direction });
       if (!trig.triggered) { log(`[MTF-OB] ${symbol} ${cand.direction} in ${cand.ob.tf} OB — waiting for ${trig.tf}m CHoCH`); continue; }
 
-      // TP = opposite liquidity
+      // TP = the opposite OB ("eat the green OB"), else opposite liquidity.
       const upto = piv.filter(p => p.idx <= lastPivot.idx);
       const pools = smc.detectLiquidityPools(c15, upto) || [];
       const highs = piv.filter(p => p.type === 'HIGH'), lows = piv.filter(p => p.type === 'LOW');
       const e = trig.entry, dir = cand.direction === 'LONG' ? 1 : -1;
       const tgts = dir > 0
-        ? [...pools.filter(p => p.label === 'EQH' && p.level > e).map(p => p.level), ...highs.filter(h => h.price > e).map(h => h.price)]
-        : [...pools.filter(p => p.label === 'EQL' && p.level < e).map(p => p.level), ...lows.filter(l => l.price < e).map(l => l.price)];
+        ? [...obs.filter(o => o.kind === 'BEARISH' && o.bottom > e).map(o => o.bottom),
+           ...pools.filter(p => p.label === 'EQH' && p.level > e).map(p => p.level), ...highs.filter(h => h.price > e).map(h => h.price)]
+        : [...obs.filter(o => o.kind === 'BULLISH' && o.top < e).map(o => o.top),
+           ...pools.filter(p => p.label === 'EQL' && p.level < e).map(p => p.level), ...lows.filter(l => l.price < e).map(l => l.price)];
       if (!tgts.length) continue;
       const tp = dir > 0 ? Math.min(...tgts) : Math.max(...tgts);
       const risk = Math.abs(e - trig.stop), reward = Math.abs(tp - e);
@@ -138,6 +170,13 @@ if (require.main === module && process.argv.includes('--selftest')) {
   chk('LL breakout in bear OB → SHORT', mtfCandidate({ lastPivot: { type: 'LOW', label: 'LL', price: 110 }, price: 110, obs: bearOB, profile: 'breakout' })?.direction, 'SHORT');
   // HH (bullish) with breakout profile, price in a BULLISH OB → LONG
   chk('HH breakout in bull OB → LONG', mtfCandidate({ lastPivot: { type: 'HIGH', label: 'HH', price: 100 }, price: 100, obs: bullOB, profile: 'breakout' })?.direction, 'LONG');
+  // ── climax profile (owner's method): direction from the OB, not the label ──
+  // A climax HH into a SUPPLY OB → SHORT (label-based profiles would call it LONG).
+  chk('climax HH in bear OB → SHORT', mtfCandidate({ lastPivot: { type: 'HIGH', label: 'HH', price: 110 }, price: 110, obs: bearOB, profile: 'climax', climaxRatio: 3.5, climaxMin: 3.0 })?.direction, 'SHORT');
+  // A climax LOW into a DEMAND OB → LONG.
+  chk('climax LOW in bull OB → LONG', mtfCandidate({ lastPivot: { type: 'LOW', label: 'LL', price: 100 }, price: 100, obs: bullOB, profile: 'climax', climaxRatio: 4.0, climaxMin: 3.0 })?.direction, 'LONG');
+  // No climax (2.0 < 3.0 min) → blocked even at the OB.
+  chk('no climax → blocked', mtfCandidate({ lastPivot: { type: 'HIGH', label: 'HH', price: 110 }, price: 110, obs: bearOB, profile: 'climax', climaxRatio: 2.0, climaxMin: 3.0 }), null);
   console.log(`\nself-test: ${pass} passed, ${fail} failed`);
   process.exitCode = fail ? 1 : 0;
 }
