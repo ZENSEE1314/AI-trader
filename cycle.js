@@ -1925,8 +1925,12 @@ async function executeForAllUsers(pick) {
     return;
   }
 
-  if (pick?.setup !== 'EXPO_BASELINE' || pick?.source !== 'expo-watcher') {
-    bLog.trade(`EXPO-ONLY BLOCKED: ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
+  // Executor allowlist. EXPO is always allowed; MTF-OB only when its flag is set
+  // (off by default → no behavior change). Everything else stays blocked.
+  const _isExpo  = pick?.setup === 'EXPO_BASELINE' && pick?.source === 'expo-watcher';
+  const _isMtfOb = pick?.source === 'mtf-ob' && process.env.MTF_OB_ENABLED === '1';
+  if (!_isExpo && !_isMtfOb) {
+    bLog.trade(`EXECUTOR BLOCKED: ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
     return 'EXPO_ONLY_BLOCKED';
   }
 
@@ -2240,6 +2244,7 @@ async function executeForAllUsers(pick) {
         // Expo baseline is validated only at 20x — BTC's default 75x would turn the
         // 50%-margin stop into a 0.67% price stop (over-leveraged, liquidation risk).
         if (pick.setup === 'EXPO_BASELINE') userLev = pick.leverage || 20;
+        if (pick.source === 'mtf-ob')       userLev = pick.leverage || 25;
         if (userLev === null) {
           userLog.trade(`User ${key.email}: ${symbol} has no token configuration — skipped`);
           return;
@@ -2291,6 +2296,11 @@ async function executeForAllUsers(pick) {
           // OOS-validated: SOL/ETH — SL −35% margin, TP +50% margin at 20x
           dirSl = pick.slMarginFrac ?? (0.35 / (pick.leverage || 20));
           dirTp = pick.tpMarginFrac ?? (0.50 / (pick.leverage || 20));
+        } else if (pick.source === 'mtf-ob') {
+          // MTF-OB: honor the strategy's OWN levels — tight 3m stop + opposite-OB
+          // target — as price fractions (the liq guard below still clamps the SL).
+          dirSl = (pick.sl  && pick.price) ? Math.abs(pick.price - pick.sl)  / pick.price : (0.40 / userLev);
+          dirTp = (pick.tp1 && pick.price) ? Math.abs(pick.tp1  - pick.price) / pick.price : (0.60 / userLev);
         }
         const rawDirTrail = activeVer?.[dirTrailKey] != null && parseFloat(activeVer[dirTrailKey]) > 0
           ? parseFloat(activeVer[dirTrailKey]) * 100  // price fraction → capital %

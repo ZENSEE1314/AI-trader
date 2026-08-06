@@ -139,6 +139,7 @@ async function scanMtfOb(log = () => {}) {
       picks.push({
         symbol, sym: symbol, direction: cand.direction,
         price: e, sl: trig.stop, tp1: tp,
+        leverage: Number(process.env.MTF_OB_LEVERAGE || 25) || 25,   // low by default — tight 3m stop
         setupName: `MTF_OB_${profile}`, type: `${cand.ob.tf}OB+15m${cand.label}+${trig.tf}m`,
         score: 70, source: 'mtf-ob',
       });
