@@ -1834,6 +1834,10 @@ async function main() {
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
       const result = await executeForAllUsers(pick);
 
+      if (result === 'COOLDOWN') {
+        bLog.trade(`${pick.symbol} in post-close cooldown — skipping re-entry, waiting for next entry`);
+        continue;
+      }
       if (result === 'ALL_TOO_EXPENSIVE') {
         bLog.trade(`${pick.symbol} too expensive for all users — trying next signal...`);
         continue;
@@ -1932,6 +1936,41 @@ async function executeForAllUsers(pick) {
   if (!_isExpo && !_isMtfOb) {
     bLog.trade(`EXECUTOR BLOCKED: ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
     return 'EXPO_ONLY_BLOCKED';
+  }
+
+  // ── POST-CLOSE COOLDOWN (central chokepoint — every execution path funnels here) ──
+  // After ANY close on a symbol (TP/SL/manual close/win/loss/etc.), block a fresh
+  // entry on that same symbol for POST_CLOSE_COOLDOWN_MIN minutes. Without this the
+  // bot re-opens the identical setup on the very next scan the moment a trade closes.
+  // With it, the bot waits for a genuinely new entry after each close.
+  // Bypassed for: structure reversals (pick.bypassCooldown) and explicit TradingView
+  // manual overrides. Set POST_CLOSE_COOLDOWN_MIN=0 to disable entirely.
+  const COOLDOWN_MIN = parseInt(process.env.POST_CLOSE_COOLDOWN_MIN || '60', 10);
+  const cooldownBypass = pick?.bypassCooldown === true
+    || (pick?.source === 'tradingview' && pick?.override === true);
+  if (COOLDOWN_MIN > 0 && !cooldownBypass) {
+    try {
+      const cdSym = String(pick?.symbol || pick?.sym || '').toUpperCase();
+      const recentClose = await db.query(
+        `SELECT closed_at FROM trades
+          WHERE UPPER(symbol) = $1
+            AND status IN ('WIN','LOSS','TP','SL','CLOSED','GHOST','TIMEOUT')
+            AND closed_at IS NOT NULL
+            AND closed_at > NOW() - make_interval(mins => $2)
+          ORDER BY closed_at DESC LIMIT 1`,
+        [cdSym, COOLDOWN_MIN]
+      );
+      if (recentClose.length) {
+        const minsLeft = Math.max(1, Math.ceil(
+          COOLDOWN_MIN - (Date.now() - new Date(recentClose[0].closed_at).getTime()) / 60000
+        ));
+        bLog.trade(`POST-CLOSE COOLDOWN: ${cdSym} closed recently — blocking re-entry for ${minsLeft}m more`);
+        return 'COOLDOWN';
+      }
+    } catch (cdErr) {
+      // Fail-open: a DB hiccup must not permanently block trading.
+      bLog.error(`Post-close cooldown check failed (allowing trade): ${cdErr.message}`);
+    }
   }
 
   try {
