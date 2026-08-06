@@ -1933,9 +1933,11 @@ async function executeForAllUsers(pick) {
     return;
   }
 
-  // Executor allowlist. EXPO is always allowed; MTF-OB only when its flag is set
-  // (off by default → no behavior change). Everything else stays blocked.
-  const _isExpo  = pick?.setup === 'EXPO_BASELINE' && pick?.source === 'expo-watcher';
+  // Executor allowlist. EXPO is allowed unless turned off (EXPO_ENABLED=0 → run
+  // MTF-OB only); MTF-OB only when its flag is set. Everything else stays blocked.
+  // Exits are a separate path, so turning EXPO off never strands an open position.
+  const _expoOn  = process.env.EXPO_ENABLED !== '0';
+  const _isExpo  = _expoOn && pick?.setup === 'EXPO_BASELINE' && pick?.source === 'expo-watcher';
   const _isMtfOb = pick?.source === 'mtf-ob' && process.env.MTF_OB_ENABLED === '1';
   if (!_isExpo && !_isMtfOb) {
     bLog.trade(`EXECUTOR BLOCKED: ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
