@@ -236,6 +236,21 @@ const TP_PCT = 0.75;   // 75% trade-margin target
 // AI_TRADING_ENABLED=0 (the kill switch) — exits/position mgmt keep running regardless.
 const AI_TRADING_ENABLED = process.env.AI_TRADING_ENABLED !== '0';
 
+// GLOBAL SYMBOL BLOCK (owner 2026-08-07): BTC must NEVER open an AI entry, from ANY source
+// (Expo, MTF-OB, or anything added later). This is the central chokepoint every entry flows
+// through, so blocking here is bulletproof regardless of per-watcher config. Exits / position
+// management are unaffected — an already-open BTC position is still closed normally.
+// Env AI_BLOCKED_SYMBOLS overrides (comma-separated, e.g. "BTCUSDT,XRPUSDT"; "" to allow all).
+const AI_BLOCKED_SYMBOLS = new Set(
+  (process.env.AI_BLOCKED_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+);
+const isSymbolBlocked = (sym) => {
+  if (!sym) return false;
+  const s = String(sym).toUpperCase();
+  for (const b of AI_BLOCKED_SYMBOLS) if (s === b || s.startsWith(b.replace('USDT', ''))) return true;
+  return false;
+};
+
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
 // Admin activates a backtest version via the UI → params saved to settings.
 // cycle.js reads them here and overrides SL/TP/trail at trade time.
@@ -1922,6 +1937,13 @@ async function executeForAllUsers(pick) {
     bLog.trade(`[AI-OFF] entry blocked: ${pick?.symbol || '?'} ${pick?.direction || ''} ${pick?.setupName || pick?.setup || ''} — AI trading disabled by owner (set AI_TRADING_ENABLED=1 to resume)`);
     return 'AI_OFF';
   }
+  // GLOBAL SYMBOL BLOCK — BTC (and anything in AI_BLOCKED_SYMBOLS) can never open an entry,
+  // no matter which watcher produced the signal. Exits still run for open positions.
+  const _blkSym = pick?.symbol || pick?.sym;
+  if (isSymbolBlocked(_blkSym)) {
+    bLog.trade(`[SYMBOL-BLOCKED] entry blocked: ${_blkSym} ${pick?.direction || ''} ${pick?.setupName || pick?.setup || ''} source=${pick?.source || '?'} — ${_blkSym} is on the owner block list (AI_BLOCKED_SYMBOLS)`);
+    return 'SYMBOL_BLOCKED';
+  }
   let db, cryptoUtils, BitunixClient;
   try {
     db = require('./db');
@@ -1933,12 +1955,14 @@ async function executeForAllUsers(pick) {
     return;
   }
 
-  // Executor allowlist. EXPO is always allowed; MTF-OB only when its flag is set
-  // (off by default → no behavior change). Everything else stays blocked.
-  const _isExpo  = pick?.setup === 'EXPO_BASELINE' && pick?.source === 'expo-watcher';
-  const _isMtfOb = pick?.source === 'mtf-ob' && process.env.MTF_OB_ENABLED === '1';
-  if (!_isExpo && !_isMtfOb) {
-    bLog.trade(`EXECUTOR BLOCKED: ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
+  // EXPO-ONLY EXECUTOR (owner 2026-08-07): the Expo strategy is the ONLY thing allowed to
+  // open a trade. Every other source — the coordinator cycle, MTF-OB, sweep, copy-trade,
+  // polymarket, any agent — is hard-blocked here, the single chokepoint all entries pass
+  // through. No env flag can re-enable another strategy; this is deliberately not toggleable.
+  // (Exits / position management for already-open trades run elsewhere and are unaffected.)
+  const _isExpo = pick?.setup === 'EXPO_BASELINE' && pick?.source === 'expo-watcher';
+  if (!_isExpo) {
+    bLog.trade(`EXECUTOR BLOCKED (Expo-only): ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
     return 'EXPO_ONLY_BLOCKED';
   }
 
