@@ -202,16 +202,37 @@ const SL_MARGIN_BY_SYM = { SOLUSDT: 0.30, ETHUSDT: 0.40 };
 const VWAP_ZONE_BY_SYM = { SOLUSDT: true, ETHUSDT: false };   // true = tight 1-2σ zone; false = base gate
 const levOf = (sym) => LEV_BY_SYM[sym] || LEVERAGE;
 const slMarginOf = (sym) => SL_MARGIN_BY_SYM[sym] ?? SL_MARGIN;
-// 1h-trend filter (owner 2026-08-06): only trade WITH the 1h structure — long only when
-// the latest 1h low is a HL (uptrend), short only when the latest 1h high is a LH
-// (downtrend). Backtest: ETH +$1,937→+$2,446/90d, SOL +$1,197→+$1,344. Env HTF_TREND=0 off.
+// HTF-trend filter (owner 2026-08-07): only trade WITH the higher-timeframe structure —
+// follow BOTH the 4h AND the 1h Expo structure. The gate reads the LATEST structure label
+// on each timeframe (whichever of HH/HL/LH/LL printed most recently in time) and derives a
+// trend from it: HH/HL → uptrend, LH/LL → downtrend. A LONG needs every loaded timeframe in
+// an uptrend; a SHORT needs every loaded timeframe in a downtrend. This fixes the old bug
+// where a fresh 1h LH (bearish "last symptom") did NOT block a long because the gate only
+// looked at the latest LOW label (HL), never the LH. Backtest basis: ETH +$1,937→+$2,446/90d,
+// SOL +$1,197→+$1,344. Fails open per-timeframe until that HTF loads. Env HTF_TREND=0 disables.
 const HTF_TREND = process.env.HTF_TREND !== '0';
-const _htf1h = {};   // sym → { high: 'HH'|'LH'|null, low: 'HL'|'LL'|null } (latest 1h labels)
-const htf1hAllows = (sym, dir) => {
+const _htf1h = {};   // sym → { latest, high, low } — latest = most-recent label of any kind
+const _htf4h = {};   // sym → { latest, high, low }
+// Trend from the latest label of one timeframe: 'LONG' (HH/HL), 'SHORT' (LH/LL), or null (unloaded).
+const htfTrendOf = (store, sym) => {
+  const h = store[sym];
+  if (!h || !h.latest) return null;
+  return (h.latest === 'HH' || h.latest === 'HL') ? 'LONG' : 'SHORT';
+};
+// Allow dir only if EVERY loaded HTF (4h + 1h) agrees with it. If the last symptom on any
+// timeframe is an LH/LL, that timeframe reads SHORT and a LONG is blocked (and vice-versa).
+const htfAllows = (sym, dir) => {
   if (!HTF_TREND) return true;
-  const h = _htf1h[sym];
-  if (!h) return true;   // 1h not loaded yet (startup) — don't block
-  return dir === 'LONG' ? h.low === 'HL' : h.high === 'LH';
+  for (const store of [_htf4h, _htf1h]) {
+    const t = htfTrendOf(store, sym);
+    if (t == null) continue;         // this HTF not loaded yet (startup) — don't block on it
+    if (t !== dir) return false;     // HTF trend opposes the entry → no counter-trend trade
+  }
+  return true;
+};
+const htfSnapshot = (sym) => {
+  const a = _htf4h[sym] || {}, b = _htf1h[sym] || {};
+  return `4h last=${a.latest || '?'} (hi=${a.high || '?'} lo=${a.low || '?'}), 1h last=${b.latest || '?'} (hi=${b.high || '?'} lo=${b.low || '?'})`;
 };
 const BYBIT_URL    = 'https://api.bybit.com/v5/market/kline';
 
@@ -248,6 +269,13 @@ function biasAlive(sym) {
 const ENTRY_SYMBOLS = new Set(
   (process.env.EXPO_ENTRY_SYMBOLS || 'SOLUSDT,ETHUSDT').split(',').map(s => s.trim()).filter(Boolean)
 );
+// Hard BTC block (owner 2026-08-07): BTC must NEVER open an entry — it loses every config
+// and the owner has permanently excluded it. Strip any blocked symbol even if it slipped
+// into EXPO_ENTRY_SYMBOLS via env. BTC is still watched (labels drive structure exits).
+const BLOCKED_ENTRY_SYMBOLS = new Set(
+  (process.env.EXPO_BLOCKED_SYMBOLS || 'BTCUSDT').split(',').map(s => s.trim()).filter(Boolean)
+);
+for (const s of BLOCKED_ENTRY_SYMBOLS) ENTRY_SYMBOLS.delete(s);
 
 // ── Power-confirmation gate (evaluated ONCE, at the 15m label) ────
 // A label opens an entry window only if taker flow on its own pivot bar carries
@@ -469,9 +497,10 @@ function watch15m(client, ind, tvTicker) {
       if (newest.dir && age <= LABEL_MAX_AGE_MS) {
         // Label entries are disabled for this symbol (we still watch it, because its
         // labels drive structure exits for open trades — including sweep trades).
-        if (!ENTRY_SYMBOLS.has(sym)) {
+        if (BLOCKED_ENTRY_SYMBOLS.has(sym) || !ENTRY_SYMBOLS.has(sym)) {
           delete biasMap[sym];
-          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} — label entries disabled for ${sym} (exits still active)`);
+          const why = BLOCKED_ENTRY_SYMBOLS.has(sym) ? 'hard-blocked' : 'disabled';
+          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} — label entries ${why} for ${sym} (exits still active)`);
           return;
         }
         const vwap = expoPivotAtOuterVwap(periods, newest.x, newest.dir, !!VWAP_ZONE_BY_SYM[sym]);
@@ -480,11 +509,10 @@ function watch15m(client, ind, tvTicker) {
           bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: ${vwap.reason}; ${newest.dir} requires 15m VWAP trend alignment`);
           return;
         }
-        // 1h-trend filter: only trade WITH the 1h structure (no counter-trend entries).
-        if (!htf1hAllows(sym, newest.dir)) {
+        // HTF-trend filter: only trade WITH the 4h AND 1h structure (no counter-trend entries).
+        if (!htfAllows(sym, newest.dir)) {
           delete biasMap[sym];
-          const h = _htf1h[sym] || {};
-          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: 1h trend disallows ${newest.dir} (1h low=${h.low || '?'} high=${h.high || '?'})`);
+          bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} blocked: HTF trend disallows ${newest.dir} — ${htfSnapshot(sym)}`);
           return;
         }
         // Power-confirmation gate — evaluated ONCE, here, on the label's own pivot
@@ -590,20 +618,23 @@ function watchDiag1m(client, ind, tvTicker) {
   });
 }
 
-// 1h Expo study → tracks the latest 1h high-label (HH/LH) and low-label (HL/LL) so the
-// 15m entry can gate on the 1h trend (long only under a 1h HL, short only under a 1h LH).
-function watchHtf1h(client, ind, tvTicker) {
+// HTF Expo study → tracks, on one higher timeframe, the latest high-label (HH/LH), the
+// latest low-label (HL/LL), AND the single most-recent label of any kind (`latest`) so the
+// 15m entry can gate on the HTF trend. `latest` is what fixes the LH bug: the last symptom
+// to print decides the trend, so a fresh LH blocks longs even when an older HL is the last low.
+// tf: TradingView timeframe string ('240' = 4h, '60' = 1h). store: _htf4h or _htf1h.
+function watchHtf(client, ind, tvTicker, tf, store) {
   const sym = normSym(tvTicker);
   const chart = new client.Session.Chart();
-  chart.setMarket(tvTicker, { timeframe: '60', range: HISTORY_BARS });
+  chart.setMarket(tvTicker, { timeframe: tf, range: HISTORY_BARS });
   const study = new chart.Study(ind);
-  study.onError((...e) => bLog(`[${sym}][1h] HTF study error: ${e.join(' ')}`));
+  study.onError((...e) => bLog(`[${sym}][${tf}] HTF study error: ${e.join(' ')}`));
   study.onUpdate(() => {
     try {
       const labels  = (study.graphic && study.graphic.labels) || [];
       const periods = chart.periods || [];
       if (!labels.length || !periods.length) return;
-      let hi = null, lo = null, hiT = 0, loT = 0;
+      let hi = null, lo = null, latest = null, hiT = 0, loT = 0, latT = 0;
       for (const l of labels) {
         if (l.x == null || !/^(HH|HL|LH|LL)$/.test(l.text || '')) continue;
         const bar = periods[l.x];
@@ -611,9 +642,10 @@ function watchHtf1h(client, ind, tvTicker) {
         const t = bar.time * 1000;
         if ((l.text === 'HH' || l.text === 'LH') && t > hiT) { hiT = t; hi = l.text; }
         if ((l.text === 'HL' || l.text === 'LL') && t > loT) { loT = t; lo = l.text; }
+        if (t > latT) { latT = t; latest = l.text; }
       }
-      _htf1h[sym] = { high: hi, low: lo };
-    } catch (e) { bLog(`[${sym}][1h] HTF error: ${e.message}`); }
+      store[sym] = { latest, high: hi, low: lo };
+    } catch (e) { bLog(`[${sym}][${tf}] HTF error: ${e.message}`); }
   });
 }
 
@@ -632,10 +664,11 @@ function connectAll(ind) {
       try { watchDiag1m(client, ind, tv); } catch (e) { bLog(`[${normSym(tv)}][1m] DIAG watch failed: ${e.message}`); }
     }
     if (HTF_TREND) {
-      try { watchHtf1h(client, ind, tv); } catch (e) { bLog(`[${normSym(tv)}][1h] HTF watch failed: ${e.message}`); }
+      try { watchHtf(client, ind, tv, '240', _htf4h); } catch (e) { bLog(`[${normSym(tv)}][4h] HTF watch failed: ${e.message}`); }
+      try { watchHtf(client, ind, tv, '60',  _htf1h); } catch (e) { bLog(`[${normSym(tv)}][1h] HTF watch failed: ${e.message}`); }
     }
   }
-  bLog(`Watching ${TV_SYMBOLS.map(normSym).join('/')} on one TV client${diag1m ? ' (+1m DIAG)' : ''}${HTF_TREND ? ' (+1h trend filter)' : ''}`);
+  bLog(`Watching ${TV_SYMBOLS.map(normSym).join('/')} on one TV client${diag1m ? ' (+1m DIAG)' : ''}${HTF_TREND ? ' (+4h/1h trend filter)' : ''}`);
 }
 
 // ── 1m entry scan loop (native Bybit) ────────────────────────────
@@ -770,11 +803,11 @@ function getStatus() {
   }
   return {
     config: {
-      watched: TV_SYMBOLS.map(normSym), entrySymbols: [...ENTRY_SYMBOLS],
+      watched: TV_SYMBOLS.map(normSym), entrySymbols: [...ENTRY_SYMBOLS], blockedSymbols: [...BLOCKED_ENTRY_SYMBOLS],
       labelMaxAgeMin: LABEL_MAX_AGE_MS / 60000, entryWindowMin: WINDOW_MS / 60000,
       leverage: LEVERAGE, slMargin: SL_MARGIN,
       perCoin: [...ENTRY_SYMBOLS].reduce((o, s) => { o[s] = { lev: levOf(s), slMargin: slMarginOf(s), vwapZone: !!VWAP_ZONE_BY_SYM[s] }; return o; }, {}),
-      htf1hFilter: HTF_TREND, htf1h: _htf1h,
+      htfFilter: HTF_TREND, htf4h: _htf4h, htf1h: _htf1h,
       powerGate: POWER_GATE, powerTh: POWER_TH, powerLowTh: POWER_LOW_TH, powerAt: 'label',
     },
     tvConnected: !!_client,
