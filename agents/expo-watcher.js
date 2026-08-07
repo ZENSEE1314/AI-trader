@@ -182,6 +182,14 @@ const HISTORY_BARS = 300;
 // 8m = the peak (best 90d, ties 5m on 30d). Env ENTRY_WINDOW_MIN to change.
 const ENTRY_CONFIRM_MS = Number(process.env.ENTRY_WINDOW_MIN || 8) * 60 * 1000;
 const WINDOW_MS    = ENTRY_CONFIRM_MS;     // entry window once a fresh Expo HL/LH appears
+// Pullback-proximity gate (owner 2026-08-07): an HL long is a PULLBACK into the HL, not a
+// chase. The 1m swing entry only fires while price is still near the pivot — within
+// PULLBACK_FRAC of the trade's own SL price-distance ABOVE the HL (for shorts: below the LH).
+// Beyond that the HL no longer sits under the stop (no structural protection) — the classic
+// "entered on top of the HL" loser. Distance is measured to the pivot bar's low(HL)/high(LH).
+// Env EXPO_PULLBACK_FRAC sets the multiple (default 0.5 = within half the stop distance);
+// EXPO_PULLBACK_FRAC=0 disables the gate (revert to enter-on-any-swing).
+const PULLBACK_FRAC = Number(process.env.EXPO_PULLBACK_FRAC ?? 0.5);
 const LABEL_MAX_AGE_MS = 45 * 60 * 1000;   // newborn label tradeable if its pivot bar is ≤3 bars old (V-bottoms confirm late)
 const COOLDOWN_MS  = 30 * 60 * 1000;       // 30 min per symbol per direction
 const SCAN_MS      = 30_000;               // 1m entry scan cadence
@@ -554,8 +562,12 @@ function watch15m(client, ind, tvTicker) {
           }
         }
         // Newborn structure label + flow behind it → open the entry window now.
-        biasMap[sym] = { direction: newest.dir, labelTime: newest.time, openedAt: Date.now(), traded: false };
-        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (pivot age ${Math.round(age / 60000)}m) → bias=${newest.dir} LIVE — window ${WINDOW_MS / 60000}m`);
+        // Capture the pivot level (HL bar low / LH bar high) so the 1m entry can require a
+        // pullback back INTO it rather than chasing an extended move away from structure.
+        const pivotBar = periods[newest.x];
+        const pivotPrice = pivotBar ? (newest.dir === 'LONG' ? pLow(pivotBar) : pHigh(pivotBar)) : null;
+        biasMap[sym] = { direction: newest.dir, labelTime: newest.time, openedAt: Date.now(), traded: false, pivotPrice };
+        bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (pivot age ${Math.round(age / 60000)}m) → bias=${newest.dir} LIVE @ pivot ${pivotPrice ?? '?'} — window ${WINDOW_MS / 60000}m`);
       } else if (newest.dir) {
         delete biasMap[sym];
         bLog(`[${sym}][15m] Expo ${newest.type} @ ${at} (pivot age ${Math.round(age / 60000)}m) — pivot older than ${LABEL_MAX_AGE_MS / 60000}m cap, bias cleared`);
@@ -706,6 +718,21 @@ async function scanEntries() {
 
       const price = c1m[c1m.length - 1].close;
       const isLong = dir === 'LONG';
+
+      // Pullback-proximity gate: don't chase. The entry must still be near the HL/LH pivot —
+      // within PULLBACK_FRAC of this trade's SL price-distance beyond it (above HL for longs,
+      // below LH for shorts). Distance only counted on the "extended" side; a deeper pullback
+      // (price at/through the pivot) is always fine. Env EXPO_PULLBACK_FRAC=0 disables.
+      if (PULLBACK_FRAC > 0 && b.pivotPrice != null) {
+        const slPriceDist = (slMarginOf(sym) / levOf(sym)) * price;   // e.g. ETH 40%/50x = 0.8% of price
+        const maxDist = PULLBACK_FRAC * slPriceDist;
+        const dist = isLong ? price - b.pivotPrice : b.pivotPrice - price;   // >0 = extended away from pivot
+        if (slPriceDist > 0 && dist > maxDist) {
+          bLog(`[${sym}][1m] ${dir} blocked — entry ${price} is ${(dist / price * 100).toFixed(2)}% ${isLong ? 'above HL' : 'below LH'} ${b.pivotPrice} (cap ${(maxDist / price * 100).toFixed(2)}%) — chasing, not a pullback into structure`);
+          continue;
+        }
+      }
+
       const timefm = await checkTimefmDirection({ symbol: sym, direction: dir, candles: c1m });
       const timefmMove = Number.isFinite(timefm.moveBps) ? ` (${timefm.moveBps.toFixed(1)} bps)` : '';
       if (!timefm.pass) {
@@ -807,7 +834,7 @@ function getStatus() {
       labelMaxAgeMin: LABEL_MAX_AGE_MS / 60000, entryWindowMin: WINDOW_MS / 60000,
       leverage: LEVERAGE, slMargin: SL_MARGIN,
       perCoin: [...ENTRY_SYMBOLS].reduce((o, s) => { o[s] = { lev: levOf(s), slMargin: slMarginOf(s), vwapZone: !!VWAP_ZONE_BY_SYM[s] }; return o; }, {}),
-      htfFilter: HTF_TREND, htf4h: _htf4h, htf1h: _htf1h,
+      htfFilter: HTF_TREND, htf4h: _htf4h, htf1h: _htf1h, pullbackFrac: PULLBACK_FRAC,
       powerGate: POWER_GATE, powerTh: POWER_TH, powerLowTh: POWER_LOW_TH, powerAt: 'label',
     },
     tvConnected: !!_client,
