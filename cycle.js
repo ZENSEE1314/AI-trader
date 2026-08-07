@@ -1955,12 +1955,14 @@ async function executeForAllUsers(pick) {
     return;
   }
 
-  // Executor allowlist. EXPO is always allowed; MTF-OB only when its flag is set
-  // (off by default → no behavior change). Everything else stays blocked.
-  const _isExpo  = pick?.setup === 'EXPO_BASELINE' && pick?.source === 'expo-watcher';
-  const _isMtfOb = pick?.source === 'mtf-ob' && process.env.MTF_OB_ENABLED === '1';
-  if (!_isExpo && !_isMtfOb) {
-    bLog.trade(`EXECUTOR BLOCKED: ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
+  // EXPO-ONLY EXECUTOR (owner 2026-08-07): the Expo strategy is the ONLY thing allowed to
+  // open a trade. Every other source — the coordinator cycle, MTF-OB, sweep, copy-trade,
+  // polymarket, any agent — is hard-blocked here, the single chokepoint all entries pass
+  // through. No env flag can re-enable another strategy; this is deliberately not toggleable.
+  // (Exits / position management for already-open trades run elsewhere and are unaffected.)
+  const _isExpo = pick?.setup === 'EXPO_BASELINE' && pick?.source === 'expo-watcher';
+  if (!_isExpo) {
+    bLog.trade(`EXECUTOR BLOCKED (Expo-only): ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
     return 'EXPO_ONLY_BLOCKED';
   }
 
