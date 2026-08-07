@@ -251,6 +251,13 @@ const isSymbolBlocked = (sym) => {
   return false;
 };
 
+// POST-CLOSE COOLDOWN (owner 2026-08-07): after a bot position on a symbol CLOSES — by TP, SL,
+// structure/reversal exit, OR the user manually closing it on the exchange (ghost-detected) —
+// no new entry on that symbol for POST_CLOSE_COOLDOWN_MIN minutes. This is what stops the
+// "I close the trade and it opens right back" loop. Checked at the single executor chokepoint
+// and DB-backed, so it covers every source and survives restarts. Env override; 0 disables.
+const POST_CLOSE_COOLDOWN_MIN = Number(process.env.POST_CLOSE_COOLDOWN_MIN ?? 30);
+
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
 // Admin activates a backtest version via the UI → params saved to settings.
 // cycle.js reads them here and overrides SL/TP/trail at trade time.
@@ -1964,6 +1971,34 @@ async function executeForAllUsers(pick) {
   if (!_isExpo) {
     bLog.trade(`EXECUTOR BLOCKED (Expo-only): ${pick?.symbol || pick?.sym || 'unknown'} ${pick?.direction || ''} setup=${pick?.setup || pick?.setupName || 'unknown'} source=${pick?.source || 'unknown'}`);
     return 'EXPO_ONLY_BLOCKED';
+  }
+
+  // POST-CLOSE COOLDOWN — if any bot trade on this symbol closed within the last
+  // POST_CLOSE_COOLDOWN_MIN minutes (TP/SL/structure/reversal exit, or a manual close that
+  // ghost-detection recorded), refuse to re-enter. Excludes the trader's own MANUAL /
+  // TRADER_MODE rows. Fails OPEN on a query error so a DB hiccup can't wedge all entries.
+  if (POST_CLOSE_COOLDOWN_MIN > 0) {
+    const _sym = pick?.symbol || pick?.sym;
+    try {
+      const recent = await db.query(
+        `SELECT closed_at, exit_reason, status FROM trades
+          WHERE symbol = $1
+            AND status IN ('CLOSED','WIN','LOSS','GHOST','CANCELLED')
+            AND closed_at IS NOT NULL
+            AND closed_at > NOW() - make_interval(mins => $2::int)
+            AND NOT (COALESCE(setup,'') = 'MANUAL' OR COALESCE(market_structure,'') = 'TRADER_MODE')
+          ORDER BY closed_at DESC LIMIT 1`,
+        [_sym, POST_CLOSE_COOLDOWN_MIN]
+      );
+      const row = Array.isArray(recent) ? recent[0] : recent?.rows?.[0];
+      if (row) {
+        const agoMin = ((Date.now() - new Date(row.closed_at).getTime()) / 60000).toFixed(1);
+        bLog.trade(`[POST-CLOSE-COOLDOWN] entry blocked: ${_sym} ${pick?.direction || ''} — a trade closed ${agoMin}m ago (${row.exit_reason || row.status}); no re-entry for ${POST_CLOSE_COOLDOWN_MIN}m after any close`);
+        return 'POST_CLOSE_COOLDOWN';
+      }
+    } catch (e) {
+      bLog.error(`[POST-CLOSE-COOLDOWN] check failed for ${_sym} (allowing entry): ${e.message}`);
+    }
   }
 
   try {
