@@ -1,0 +1,90 @@
+//@version=5
+indicator("1H Structure Alerts — HH / HL / LL / LH", overlay=true, max_labels_count=500)
+
+// ═══════════════════════════════════════════════════════════════
+//  1H Market-Structure Alerts
+//  Fires a webhook alert every time a NEW swing pivot confirms on the
+//  chart and classifies it as:
+//     HH — Higher High   (bullish, new high)
+//     HL — Higher Low    (bullish, pullback held)
+//     LL — Lower Low      (bearish, new low)
+//     LH — Lower High     (bearish, bounce rejected)
+//
+//  This is an ALERT-ONLY tool — it does not place trades. It hits the
+//  bot's /api/tv-webhook/structure endpoint, which forwards a formatted
+//  Telegram message to you.
+//
+//  ── Setup ─────────────────────────────────────────────────────
+//   1. Open your symbol on the *1 hour* timeframe.
+//   2. Add this indicator to the chart.
+//   3. Right-click the chart → Add alert (or the ⏰ button).
+//        Condition   : "1H Structure Alerts" → "Any alert() function call"
+//        Webhook URL : https://YOUR-APP.up.railway.app/api/tv-webhook/structure
+//        (leave the alert Message box as-is — the script builds the JSON)
+//   4. Set "Once Per Bar Close" so pivots only fire when confirmed.
+//
+//  Tip: the pivot only confirms `pivotRight` bars AFTER the actual swing,
+//  so a lower pivotRight = faster alerts but more repaints/noise.
+// ═══════════════════════════════════════════════════════════════
+
+// ── Inputs ────────────────────────────────────────────────────
+pivotLeft  = input.int(10, "Pivot Left Bars",  minval=1, tooltip="Bars to the left that must be lower/higher for a swing.")
+pivotRight = input.int(3,  "Pivot Right Bars", minval=1, tooltip="Bars to the right needed to confirm the swing. Lower = faster alerts, more noise.")
+showLabels = input.bool(true, "Show HH/HL/LL/LH Labels")
+alertHH    = input.bool(true, "Alert on HH")
+alertHL    = input.bool(true, "Alert on HL")
+alertLL    = input.bool(true, "Alert on LL")
+alertLH    = input.bool(true, "Alert on LH")
+
+// ── Pivot detection ───────────────────────────────────────────
+ph = ta.pivothigh(high, pivotLeft, pivotRight)
+pl = ta.pivotlow (low,  pivotLeft, pivotRight)
+
+pivotIsHigh = not na(ph)
+pivotIsLow  = not na(pl)
+
+// ── Classify each new pivot vs the previous same-side pivot ────
+var float lastHigh = na
+var float lastLow  = na
+var string pivotType = na
+
+if pivotIsHigh
+    pivotType := na(lastHigh) or ph > lastHigh ? "HH" : "LH"
+    lastHigh  := ph
+
+if pivotIsLow
+    pivotType := na(lastLow) or pl > lastLow ? "HL" : "LL"
+    lastLow   := pl
+
+isHH = pivotIsHigh and pivotType == "HH"
+isLH = pivotIsHigh and pivotType == "LH"
+isHL = pivotIsLow  and pivotType == "HL"
+isLL = pivotIsLow  and pivotType == "LL"
+
+// ── Draw labels ───────────────────────────────────────────────
+if showLabels and pivotIsHigh
+    label.new(bar_index[pivotRight], ph, pivotType,
+              style=label.style_label_down,
+              color=(pivotType == "HH" ? color.green : color.orange),
+              textcolor=color.white, size=size.small)
+
+if showLabels and pivotIsLow
+    label.new(bar_index[pivotRight], pl, pivotType,
+              style=label.style_label_up,
+              color=(pivotType == "HL" ? color.green : color.red),
+              textcolor=color.white, size=size.small)
+
+// ── Webhook alert ─────────────────────────────────────────────
+// The pivot price is the pivot value; TradingView placeholders fill
+// symbol / timeframe / price at fire time. One alert() call handles
+// all four pivot types so a single TradingView alert covers everything.
+tfLabel = timeframe.period
+
+if isHH and alertHH
+    alert('{"pivot":"HH","symbol":"{{ticker}}","price":' + str.tostring(ph) + ',"timeframe":"' + tfLabel + '"}', alert.freq_once_per_bar_close)
+if isHL and alertHL
+    alert('{"pivot":"HL","symbol":"{{ticker}}","price":' + str.tostring(pl) + ',"timeframe":"' + tfLabel + '"}', alert.freq_once_per_bar_close)
+if isLL and alertLL
+    alert('{"pivot":"LL","symbol":"{{ticker}}","price":' + str.tostring(pl) + ',"timeframe":"' + tfLabel + '"}', alert.freq_once_per_bar_close)
+if isLH and alertLH
+    alert('{"pivot":"LH","symbol":"{{ticker}}","price":' + str.tostring(ph) + ',"timeframe":"' + tfLabel + '"}', alert.freq_once_per_bar_close)

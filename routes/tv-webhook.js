@@ -1,5 +1,5 @@
 const express = require('express');
-const { injectTVSignal } = require('../cycle');
+const { injectTVSignal, notify } = require('../cycle');
 
 const router = express.Router();
 
@@ -223,6 +223,75 @@ router.post('/smc-pro', (req, res) => {
 
   console.log(`[SMC-Pro-Suite] ${sym} ${direction} @ ${entryPrice}`);
   res.json({ ok: true, action: direction, symbol: sym, price: entryPrice });
+});
+
+// POST /api/tv-webhook/structure
+// Pure ALERT endpoint — does NOT trade. Receives 1H (or any TF) market-structure
+// pivots from the Structure Alerts Pine Script and pushes a Telegram notification
+// so you get pinged the moment price prints a new HH / HL / LL / LH swing.
+//
+// Required fields:
+//   pivot   — one of HH, HL, LL, LH
+//   symbol  — e.g. "BITUNIX:BTCUSDT.P" or "BTCUSDT" (normalised)
+//   price   — pivot price ({{close}} from TradingView)
+//
+// Optional fields:
+//   timeframe — chart timeframe label, defaults to "1H"
+//   note      — free-text note appended to the alert
+//
+// Response: { ok, pivot, symbol, price, sent }
+const STRUCTURE_META = {
+  HH: { name: 'Higher High', emoji: '📈', bias: 'Bullish — uptrend making new highs' },
+  HL: { name: 'Higher Low',  emoji: '🟢', bias: 'Bullish — pullback held, trend intact' },
+  LL: { name: 'Lower Low',   emoji: '📉', bias: 'Bearish — downtrend making new lows' },
+  LH: { name: 'Lower High',  emoji: '🔴', bias: 'Bearish — bounce rejected, trend intact' },
+};
+
+router.post('/structure', async (req, res) => {
+  const { pivot, symbol, price, timeframe, note } = req.body || {};
+
+  const type = String(pivot || '').toUpperCase().trim();
+  const meta = STRUCTURE_META[type];
+  if (!meta) {
+    return res.status(400).json({ ok: false, error: 'pivot must be one of HH, HL, LL, LH' });
+  }
+
+  // Normalise ticker — TradingView sends things like "BITUNIX:BTCUSDT.P"
+  const sym = String(symbol || '')
+    .replace(/.*:/, '')       // drop exchange prefix
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '') // strip ".P" and punctuation
+    .replace(/USDTP$/, 'USDT');
+
+  if (!sym) {
+    return res.status(400).json({ ok: false, error: 'symbol is required' });
+  }
+
+  const px = parseFloat(price);
+  const priceStr = Number.isFinite(px)
+    ? px.toLocaleString('en-US', { maximumFractionDigits: 8 })
+    : String(price ?? '—');
+
+  const tf = String(timeframe || '1H').toUpperCase();
+
+  const lines = [
+    `${meta.emoji} *${sym}* — ${tf} structure`,
+    `New *${type}* (${meta.name}) @ ${priceStr}`,
+    `_${meta.bias}_`,
+  ];
+  if (note) lines.push(`📝 ${String(note).slice(0, 200)}`);
+  const msg = lines.join('\n');
+
+  console.log(`[TV-Structure] ${sym} ${tf} ${type} @ ${priceStr}`);
+
+  try {
+    await notify(msg);
+  } catch (e) {
+    console.log(`[TV-Structure] notify failed: ${e.message?.slice(0, 80)}`);
+    return res.status(200).json({ ok: true, pivot: type, symbol: sym, price: px, sent: false });
+  }
+
+  res.json({ ok: true, pivot: type, symbol: sym, price: px, sent: true });
 });
 
 module.exports = router;
